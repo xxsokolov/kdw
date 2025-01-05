@@ -1,0 +1,33 @@
+########################
+#    Sokolov Dmitry    #
+#  xx.sokolov@mail.ru  #
+########################
+# https://github.com/xxsokolov/kdw
+[keenetic]
+host=192.168.0.1
+port=0
+
+[telegram]
+proxy = False
+proxy_server = {'https': 'socks5://username:password@domen:port'}
+token = 34324234234:johbdij43bdkj34bd3kj4bdk3j4bdkj3bd3
+access_ids = [0000000]
+
+[kdw.settings]
+
+
+[shadowsocks]
+mode=tcp_and_udp
+timeout=86400
+local_address=::
+local_port=1082
+fast_open=False
+ipv6_first=True
+
+[trojan]
+
+
+[vmess]
+
+
+[logging]

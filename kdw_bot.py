@@ -1,6 +1,7 @@
 import ast
 import base64
 import json
+import pathlib
 import sys
 import os
 import io
@@ -232,38 +233,39 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "null":
         await query.answer("no action")
         return
-    callback_data = query.data.split(":")
+    callback_data: str = query.data
 
-    if 'shadowsocks_configs' in context.user_data and context.user_data['shadowsocks_configs']:
-        if callback_data[1] == 'view':
-            await update.effective_chat.send_message(f"view json config {callback_data[0]}",
+    if 'menu_shadowsocks_configs' in context.user_data and context.user_data['menu_shadowsocks_configs']:
+        if callback_data == 'view':
+            await update.effective_chat.send_message(f"view json config {callback_data}",
                                                      reply_to_message_id=update.effective_message.message_id)
-            await query.answer("OK")
-        elif callback_data[1] == 'change':
+            await query.answer()
+        elif callback_data == 'change':
             # await update.effective_chat.send_message(f"change json config {callback_data[0]}",
             #                                          reply_to_message_id=update.effective_message.message_id)
             await update.effective_chat.send_message(text="Send me url 'Shadowsocks'.",
                                                      reply_to_message_id=update.effective_message.message_id,
-                                                     reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
+                                                     reply_markup=ReplyKeyboardMarkup([['Cancel']],
+                                                                                      resize_keyboard=True))
             await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-                                            inline_keyboard=[
-                                                [InlineKeyboardButton(
-                                                    text="⏳",
-                                                    callback_data="null")]
-                                            ]))
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="⏳",
+                        callback_data="null")]
+                ]))
             context.user_data['effective_callback_message'] = update.effective_message.id
-            await query.answer("OK")
+            await query.answer()
             return SHADOWSOCKS_KEY
-        elif callback_data[1] == 'delete':
+        elif callback_data == 'delete':
             await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-                                            inline_keyboard=[
-                                                [InlineKeyboardButton(
-                                                    text="❌",
-                                                    callback_data="null")]
-                                            ]))
-            await query.answer("OK")
-        elif callback_data[1] == 'add':
-            await query.answer("OK")
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="❌",
+                        callback_data="null")]
+                ]))
+            await query.answer("DELETE OK!")
+        elif callback_data == 'add':
+            await query.answer("add")
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
@@ -288,30 +290,31 @@ async def callback_none(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @private_access
 async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    # logger.info("{full_name} ({user_id}) entered to the 'Shadowsocks' menu.".format(full_name=user.full_name,
-    # user_id=user.id))
-    #await context.la
-    xxx = ['shadowsocks_ru.json', 'shadowsocks_de.json']
-    for file in xxx:
-        await update.message.reply_text(text=f"{file}",
-                                        reply_markup=InlineKeyboardMarkup(
-                                            inline_keyboard=[
-                                                [InlineKeyboardButton(
-                                                    text="view",
-                                                    callback_data=f"{file}:view"),
-                                                    InlineKeyboardButton(
-                                                        text="change",
-                                                        callback_data=f"{file}:change"),
-                                                    InlineKeyboardButton(
-                                                        text="delete",
-                                                        callback_data=f"{file}:delete")]
-                                            ]))
+    files = [f for f in pathlib.Path().glob(config.get('shadowsocks', 'path') + "/*.json")]
+    context.user_data['shadowsocks']: list = []
+    for file in files:
+        msg = await update.effective_chat.send_message(text=f"{file}",
+                                                       reply_markup=InlineKeyboardMarkup(
+                                                           inline_keyboard=[
+                                                               [InlineKeyboardButton(
+                                                                   text="👀 view",
+                                                                   callback_data="view"),
+                                                                   InlineKeyboardButton(
+                                                                       text="📝 change",
+                                                                       callback_data="change"),
+                                                                   InlineKeyboardButton(
+                                                                       text="🗑️ delete",
+                                                                       callback_data="delete")]
+                                                           ]), disable_notification=True)
+        context.user_data['shadowsocks'].append(dict(filename=file, message_id=msg.message_id))
 
-    await update.message.reply_text(text="Add new config?",
-                                    reply_markup=InlineKeyboardMarkup(
-                                        inline_keyboard=[[InlineKeyboardButton(text="yes", callback_data='null:add')]]))
-    context.user_data['shadowsocks_configs'] = True
+    await update.effective_chat.send_message(text="Add new config?",
+                                             reply_markup=InlineKeyboardMarkup(
+                                                 inline_keyboard=[
+                                                     [InlineKeyboardButton(text="yes", callback_data='null:add')]]),
+                                             disable_notification=True)
+    context.user_data['menu_shadowsocks_configs'] = True
+
     #return KDW_KEYS
 
 
@@ -344,28 +347,38 @@ async def decode_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_T
         return SHADOWSOCKS_KEY
 
     parts = urlparse(url)
-    sh = dict(server=[parts.hostname],
-              mode=config.get('shadowsocks', 'mode'),
-              server_port=int(parts.port),
-              password=str(base64.b64decode(parts.username)).split(':')[1],
-              timeout=config.getint('shadowsocks', 'timeout'),
-              method=str(base64.b64decode(parts.username)).split(':')[0],
-              local_address=config.get('shadowsocks', 'local_address'),
-              local_port=config.getint('shadowsocks', 'local_port'),
-              fast_open=config.getboolean('shadowsocks', 'fast_open'),
-              ipv6_first=config.getboolean('shadowsocks', 'ipv6_first'))
+    sh_config = dict(server=[parts.hostname],
+                     mode=config.get('shadowsocks', 'mode'),
+                     server_port=int(parts.port),
+                     password=base64.b64decode(parts.username).decode("utf-8").split(':')[1],
+                     timeout=config.getint('shadowsocks', 'timeout'),
+                     method=base64.b64decode(parts.username).decode("utf-8").split(':')[0],
+                     local_address=config.get('shadowsocks', 'local_address'),
+                     local_port=config.getint('shadowsocks', 'local_port'),
+                     fast_open=config.getboolean('shadowsocks', 'fast_open'),
+                     ipv6_first=config.getboolean('shadowsocks', 'ipv6_first'))
 
+    # await update.message.reply_text(text=f'Your parsing data \n{json.dumps(sh_config, indent=2)}',
+    #                                 reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
 
-    await update.message.reply_text(text=f'Your parsing data \n{json.dumps(sh, indent=2)}',
-                                    reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+    filename = next((item.get("filename") for item in context.user_data['shadowsocks'] if
+                     item.get("message_id") and item["message_id"] == context.user_data['effective_callback_message']),
+                    None)
+
+    with open(filename, 'w') as f:
+        json.dump(sh_config, f, indent=2)
+
     logger.info("User %s add new shadowsocks config.", user.first_name)
 
-    await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=context.user_data['effective_callback_message'], reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(
-                text="✅",
-                callback_data="null")]
-        ]))
+    await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,
+                                                message_id=context.user_data['effective_callback_message'],
+                                                reply_markup=InlineKeyboardMarkup(
+                                                    inline_keyboard=[
+                                                        [InlineKeyboardButton(
+                                                            text="✅",
+                                                            callback_data="null")]
+                                                    ]))
+    await update.message.reply_text(text="ok", reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
     #await update.callback_query.answer("OK")
     return KDW_KEYS
 

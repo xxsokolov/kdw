@@ -1,10 +1,11 @@
+import ast
 import base64
 import json
 import sys
 import os
 import io
 import time
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -12,7 +13,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
+    filters, CallbackQueryHandler
 )
 from configparser import ConfigParser
 from ast import literal_eval
@@ -23,6 +24,8 @@ from functools import wraps
 import sys
 import logging
 import traceback
+
+default_config_file = "kdw.cfg"
 
 
 class CustomFormatter(logging.Formatter):
@@ -60,7 +63,8 @@ class Log:
         else:
             self.log_level = logging.INFO
 
-        global_format = "[%(asctime)s] - PID:%(process)s - %(name)s - %(filename)s:%(lineno)d - %(levelname)s: %(message)s"
+        global_format = ("[%(asctime)s] - PID:%(process)s - %(name)s - %(filename)s:%(lineno)d - %(levelname)s: %("
+                         "message)s")
         self.log = logging.getLogger(None if debug else __name__)
         self.log.setLevel(self.log_level)
         # logging.getLogger('sqlalchemy.engine').setLevel(self.log_level)
@@ -100,9 +104,11 @@ class Log:
         return logging.getLevelName(self.log.getEffectiveLevel())
 
 
-default_config_file = "kdw.cfg"
-config = ConfigParser()
-config.read(default_config_file, encoding='utf-8')
+if os.path.isfile(default_config_file):
+    config = ConfigParser()
+    config.read(default_config_file, encoding='utf-8')
+else:
+    raise FileNotFoundError(f"Config file ({default_config_file}) not found!")
 
 logger = Log(debug=False).log
 
@@ -141,7 +147,7 @@ def private_access(f):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     await update.message.reply_text(
-        'Hi, {full_name} ({user_id})!\nI am Botgot!'.format(full_name=user.full_name, user_id=user.id),
+        'Hi, {full_name} ({user_id})!\nI am Botgod!'.format(full_name=user.full_name, user_id=user.id),
         reply_markup=ReplyKeyboardMarkup(start_keyboard, resize_keyboard=True))
     logger.info("Start session {full_name} ({user_id})".format(full_name=user.full_name, user_id=user.id))
     return await status(update, context)
@@ -149,7 +155,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @private_access
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(text='Waiting for your instructions',
+    await update.message.reply_text(text='Awaiting your instructions...',
                                     reply_markup=ReplyKeyboardMarkup(start_keyboard, resize_keyboard=True))
     return STATUS
 
@@ -220,14 +226,93 @@ async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @private_access
+async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Parses the CallbackQuery and updates the message text."""
+    query = update.callback_query
+    if query.data == "null":
+        await query.answer("no action")
+        return
+    callback_data = query.data.split(":")
+
+    if 'shadowsocks_configs' in context.user_data and context.user_data['shadowsocks_configs']:
+        if callback_data[1] == 'view':
+            await update.effective_chat.send_message(f"view json config {callback_data[0]}",
+                                                     reply_to_message_id=update.effective_message.message_id)
+            await query.answer("OK")
+        elif callback_data[1] == 'change':
+            # await update.effective_chat.send_message(f"change json config {callback_data[0]}",
+            #                                          reply_to_message_id=update.effective_message.message_id)
+            await update.effective_chat.send_message(text="Send me url 'Shadowsocks'.",
+                                                     reply_to_message_id=update.effective_message.message_id,
+                                                     reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
+            await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
+                                            inline_keyboard=[
+                                                [InlineKeyboardButton(
+                                                    text="⏳",
+                                                    callback_data="null")]
+                                            ]))
+            context.user_data['effective_callback_message'] = update.effective_message.id
+            await query.answer("OK")
+            return SHADOWSOCKS_KEY
+        elif callback_data[1] == 'delete':
+            await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
+                                            inline_keyboard=[
+                                                [InlineKeyboardButton(
+                                                    text="❌",
+                                                    callback_data="null")]
+                                            ]))
+            await query.answer("OK")
+        elif callback_data[1] == 'add':
+            await query.answer("OK")
+
+    # CallbackQueries need to be answered, even if no notification to the user is needed
+    # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
+
+    #yyy = ast.literal_eval(query.data)
+
+    #await query.edit_message_text(text=f"Selected option: \n{query.data}")
+
+
+@private_access
+async def callback_none(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Parses the CallbackQuery and updates the message text."""
+    query = update.callback_query
+
+    # CallbackQueries need to be answered, even if no notification to the user is needed
+    # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
+    await query.answer("no menu")
+    #yyy = ast.literal_eval(query.data)
+
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+
+
+@private_access
 async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     # logger.info("{full_name} ({user_id}) entered to the 'Shadowsocks' menu.".format(full_name=user.full_name,
     # user_id=user.id))
     #await context.la
-    await update.message.reply_text(text="Send me url 'Shadowsocks'.",
-                                    reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
-    return SHADOWSOCKS_KEY
+    xxx = ['shadowsocks_ru.json', 'shadowsocks_de.json']
+    for file in xxx:
+        await update.message.reply_text(text=f"{file}",
+                                        reply_markup=InlineKeyboardMarkup(
+                                            inline_keyboard=[
+                                                [InlineKeyboardButton(
+                                                    text="view",
+                                                    callback_data=f"{file}:view"),
+                                                    InlineKeyboardButton(
+                                                        text="change",
+                                                        callback_data=f"{file}:change"),
+                                                    InlineKeyboardButton(
+                                                        text="delete",
+                                                        callback_data=f"{file}:delete")]
+                                            ]))
+
+    await update.message.reply_text(text="Add new config?",
+                                    reply_markup=InlineKeyboardMarkup(
+                                        inline_keyboard=[[InlineKeyboardButton(text="yes", callback_data='null:add')]]))
+    context.user_data['shadowsocks_configs'] = True
+    #return KDW_KEYS
 
 
 @private_access
@@ -249,8 +334,16 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @private_access
 async def decode_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    key = update.message.text
-    parts = urlparse(key)
+    url = update.message.text
+    user = update.message.from_user
+    pattern = config.get("shadowsocks", "pattern")
+    import re
+    if not re.match(pattern, url):
+        await update.message.reply_text(text=f"Error! Shadowsocks URL doesn't match the pattern!",
+                                        reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
+        return SHADOWSOCKS_KEY
+
+    parts = urlparse(url)
     sh = dict(server=[parts.hostname],
               mode=config.get('shadowsocks', 'mode'),
               server_port=int(parts.port),
@@ -261,9 +354,19 @@ async def decode_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_T
               local_port=config.getint('shadowsocks', 'local_port'),
               fast_open=config.getboolean('shadowsocks', 'fast_open'),
               ipv6_first=config.getboolean('shadowsocks', 'ipv6_first'))
+
+
     await update.message.reply_text(text=f'Your parsing data \n{json.dumps(sh, indent=2)}',
                                     reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+    logger.info("User %s add new shadowsocks config.", user.first_name)
 
+    await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=context.user_data['effective_callback_message'], reply_markup=InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅",
+                callback_data="null")]
+        ]))
+    #await update.callback_query.answer("OK")
     return KDW_KEYS
 
 
@@ -290,11 +393,13 @@ if __name__ == '__main__':
                 [MessageHandler(filters.Regex('Cancel'), kdw),
                  MessageHandler(filters.Regex('Shadowsocks'), kdw_keys_shadowsocks),
                  MessageHandler(filters.Regex('Trojan'), test),
-                 MessageHandler(filters.Regex('Vmess'), test)
+                 MessageHandler(filters.Regex('Vmess'), test),
+                 CallbackQueryHandler(callback_buttons),
                  ],
             SHADOWSOCKS_KEY:
                 [MessageHandler(filters.Regex('Cancel'), kdw),
-                 MessageHandler(filters.Text(), decode_shadowsocks_key)
+                 MessageHandler(filters.Text(), decode_shadowsocks_key),
+                 CallbackQueryHandler(callback_buttons)
                  ],
         },
         fallbacks=[CommandHandler('cancel', callback=cancel)]
@@ -303,7 +408,7 @@ if __name__ == '__main__':
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.Text(), handle_text))
     application.add_handler(MessageHandler(filters.Command(), unknown))
-
+    application.add_handler(CallbackQueryHandler(callback_none))
     application.add_error_handler(error_handler)
 
     logger.info("Telegram Bot God botgod.service active (running)")
@@ -311,3 +416,8 @@ if __name__ == '__main__':
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     logger.info("Telegram Bot God botgod.service stoping")
+
+# pattern_shadowsocks = r"(?<![\w-])(ss://[^\s<>#|]+)"
+# pattern_vmess = r"(?<![\w-])(vmess://[^\s<>#|]+)"
+# pattern_vless = r"(?<![\w-])(vless://(?:(?!=reality)[^\s<>#|])+(?=[\s<>#|]))"
+# pattern_reality = r"(?<![\w-])(vless://[^\s<>#|]+?security=reality[^\s<>#|]*)"

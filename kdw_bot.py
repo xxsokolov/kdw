@@ -230,7 +230,7 @@ async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Parses the CallbackQuery and updates the message text."""
     query = update.callback_query
-    if query.data == "null":
+    if query.data == "null" or query.data is None:
         await query.answer("no action")
         return
     callback_data: str = query.data
@@ -265,7 +265,14 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]))
             await query.answer("DELETE OK!")
         elif callback_data == 'add':
-            await query.answer("add")
+            await query.answer()
+        elif callback_data == 'cancel':
+            context.user_data['menu_shadowsocks_configs'] = False
+            await query.answer()
+            await update.effective_chat.send_message(text="Cancel",
+                                                     reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard,
+                                                                                      resize_keyboard=True))
+            return KDW_KEYS
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
@@ -293,26 +300,33 @@ async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYP
     files = [f for f in pathlib.Path().glob(config.get('shadowsocks', 'path') + "/*.json")]
     context.user_data['shadowsocks']: list = []
     for file in files:
-        msg = await update.effective_chat.send_message(text=f"{file}",
-                                                       reply_markup=InlineKeyboardMarkup(
-                                                           inline_keyboard=[
-                                                               [InlineKeyboardButton(
-                                                                   text="👀 view",
-                                                                   callback_data="view"),
-                                                                   InlineKeyboardButton(
-                                                                       text="📝 change",
-                                                                       callback_data="change"),
-                                                                   InlineKeyboardButton(
-                                                                       text="🗑️ delete",
-                                                                       callback_data="delete")]
-                                                           ]), disable_notification=True)
-        context.user_data['shadowsocks'].append(dict(filename=file, message_id=msg.message_id))
+        last_msg = await update.effective_chat.send_message(text=f"{file}",
+                                                            reply_markup=InlineKeyboardMarkup(
+                                                                inline_keyboard=[
+                                                                    [InlineKeyboardButton(
+                                                                        text="👀 view",
+                                                                        callback_data="view"),
+                                                                        InlineKeyboardButton(
+                                                                            text="📝 change",
+                                                                            callback_data="change"),
+                                                                        InlineKeyboardButton(
+                                                                            text="🗑️ delete",
+                                                                            callback_data="delete")]
+                                                                ]), disable_notification=True)
+        context.user_data['shadowsocks'].append(dict(filename=file, message_id=last_msg.message_id))
 
-    await update.effective_chat.send_message(text="Add new config?",
-                                             reply_markup=InlineKeyboardMarkup(
-                                                 inline_keyboard=[
-                                                     [InlineKeyboardButton(text="yes", callback_data='null:add')]]),
-                                             disable_notification=True)
+    last_msg = await update.message.reply_text(text="What are we doing, boss?",
+                                               reply_to_message_id=update.message.message_id,
+                                               reply_markup=ReplyKeyboardRemove(),
+                                               disable_notification=True)
+    await last_msg.delete()
+
+    await update.message.reply_text(text=last_msg.text, reply_to_message_id=update.message.message_id,
+                                    reply_markup=InlineKeyboardMarkup(
+                                        inline_keyboard=[
+                                            [InlineKeyboardButton(text="Add new config",
+                                                                  callback_data='add')],
+                                            [InlineKeyboardButton(text="Cancel", callback_data='cancel')]]))
     context.user_data['menu_shadowsocks_configs'] = True
 
     #return KDW_KEYS
@@ -378,7 +392,8 @@ async def decode_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_T
                                                             text="✅",
                                                             callback_data="null")]
                                                     ]))
-    await update.message.reply_text(text="ok", reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+    await update.message.reply_text(text="ok",
+                                    reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
     #await update.callback_query.answer("OK")
     return KDW_KEYS
 

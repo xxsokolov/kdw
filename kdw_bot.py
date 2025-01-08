@@ -223,6 +223,7 @@ async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("{full_name} ({user_id}) entered to the 'Keys' menu.".format(full_name=user.full_name, user_id=user.id))
     await update.message.reply_text(text="You are in the menu 'Keys'",
                                     reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+    context.user_data.fromkeys(['menu_shadowsocks_configs', 'menu_trojan_configs', 'menu_vmess_configs'], False)
     return KDW_KEYS
 
 
@@ -230,7 +231,7 @@ async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Parses the CallbackQuery and updates the message text."""
     query = update.callback_query
-    if query.data == "null" or query.data is None:
+    if query.data == "null":
         await query.answer("no action")
         return
     callback_data: str = query.data
@@ -273,6 +274,9 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                      reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard,
                                                                                       resize_keyboard=True))
             return KDW_KEYS
+    else:
+        await query.answer("no action")
+        return
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery

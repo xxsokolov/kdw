@@ -237,18 +237,21 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     callback_data: str = query.data
 
-    if 'menu_shadowsocks_configs' in context.user_data and context.user_data['menu_shadowsocks_configs']:
-        filename = next((item.get("filename") for item in context.user_data['shadowsocks'] if
+    if context.user_data['menu_shadowsocks_configs']:
+        filename = next((item.get("filename") for item in context.user_data['shadowsocks']['configs'] if
                          item.get("message_id") and item["message_id"] == update.effective_message.message_id),
                         None)
         if callback_data == 'view':
-            text = open(filename, 'r').read()
-            await update.effective_chat.send_message(text=text, reply_to_message_id=update.effective_message.message_id)
+            if os.stat(filename).st_size != 0:
+                text = open(filename, 'r').read()
+            else:
+                text = None
+            await update.effective_chat.send_message(text=text if text else 'File is empty!', reply_to_message_id=update.effective_message.message_id)
             await query.answer()
         elif callback_data == 'change':
             # await update.effective_chat.send_message(f"change json config {callback_data[0]}",
             #                                          reply_to_message_id=update.effective_message.message_id)
-            await update.effective_chat.send_message(text="Send me url 'Shadowsocks'.",
+            await update.effective_chat.send_message(text="Send me ss://",
                                                      reply_to_message_id=update.effective_message.message_id,
                                                      reply_markup=ReplyKeyboardMarkup([['Cancel']],
                                                                                       resize_keyboard=True))
@@ -258,11 +261,12 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text="⏳",
                         callback_data="null")]
                 ]))
-            context.user_data['effective_callback_message'] = update.effective_message.id
+            context.user_data['shadowsocks']['effective_callback'] = dict(message_id=update.effective_message.id, action=callback_data)
             await query.answer()
             return SHADOWSOCKS_KEY
         elif callback_data == 'delete':
             try:
+                logger.info(f"{user.full_name} ({user.id}) deletes config file {filename}.")
                 os.remove(filename)
             except Exception as err:
                 logger.error(f"Error: {err}")
@@ -274,14 +278,27 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             callback_data="null")]
                     ]))
                 await query.answer("DELETE OK!")
-                logger.info(f"{user.full_name} ({user.id}) delete config file {filename}.")
+                logger.info(f"{user.full_name} ({user.id}) delete done.")
         elif callback_data == 'add':
+            logger.info(f"{user.full_name} ({user.id}) adds a new configuration file.")
+            await update.effective_chat.send_message(text="Send me filename without extension. (ex. `shadowsocks_de`)",
+                                                     reply_to_message_id=update.effective_message.message_id,
+                                                     reply_markup=ReplyKeyboardMarkup([['Cancel']],
+                                                                                      resize_keyboard=True), parse_mode='Markdown')
+            await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="⏳",
+                        callback_data="null")]
+                ]))
+            context.user_data['shadowsocks']['effective_callback'] = dict(message_id=update.effective_message.id, action=callback_data)
             await query.answer()
+            return SHADOWSOCKS_KEY
         elif callback_data == 'cancel':
-            context.user_data['menu_shadowsocks_configs'] = False
+            context.user_data['shadowsocks']['menu_shadowsocks_configs'] = False
             await query.answer()
 
-            msgs = [item.get("message_id") for item in context.user_data['shadowsocks']]
+            msgs = [item.get("message_id") for item in context.user_data['shadowsocks']['configs']]
 
             for msg in msgs:
                 await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=msg, reply_markup=InlineKeyboardMarkup(
@@ -325,9 +342,10 @@ async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.message.from_user
     logger.info(f"{user.full_name} ({user.id}) entered to the 'Shadowsocks' menu.")
     files = [f for f in pathlib.Path().glob(config.get('shadowsocks', 'path') + "/*.json")]
-    context.user_data['shadowsocks']: list = []
+    context.user_data['shadowsocks'] = dict(configs=[], effective_callback={})
+    context.user_data['menu_shadowsocks_configs'] = True
     for file in files:
-        last_msg = await update.effective_chat.send_message(text=f"{file}",
+        last_msg = await update.effective_chat.send_message(text=f"`{file}`",
                                                             reply_markup=InlineKeyboardMarkup(
                                                                 inline_keyboard=[
                                                                     [InlineKeyboardButton(
@@ -339,8 +357,8 @@ async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYP
                                                                         InlineKeyboardButton(
                                                                             text="🗑️ delete",
                                                                             callback_data="delete")]
-                                                                ]), disable_notification=True)
-        context.user_data['shadowsocks'].append(dict(filename=file, message_id=last_msg.message_id, add_action=False))
+                                                                ]), disable_notification=True, parse_mode='Markdown')
+        context.user_data['shadowsocks']['configs'].append(dict(filename=file, message_id=last_msg.message_id))
 
     last_msg = await update.message.reply_text(text="What are we doing, boss?",
                                                reply_to_message_id=update.message.message_id,
@@ -356,9 +374,7 @@ async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYP
                                                                              callback_data='add')],
                                                        [InlineKeyboardButton(text="Cancel", callback_data='cancel')]]))
 
-    context.user_data['shadowsocks'].append(dict(filename=None, message_id=last_msg.message_id, add_action=True))
-    context.user_data['menu_shadowsocks_configs'] = True
-
+    context.user_data['shadowsocks']['configs'].append(dict(filename=None, message_id=last_msg.message_id, add_action=True))
     #return KDW_KEYS
 
 
@@ -380,52 +396,75 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @private_access
-async def decode_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    url = update.message.text
+async def operations_shadowsocks_configs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
     user = update.message.from_user
-    pattern = config.get("shadowsocks", "pattern")
-    import re
-    if not re.match(pattern, url):
-        await update.message.reply_text(text=f"Error! Shadowsocks URL doesn't match the pattern!",
-                                        reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
-        return SHADOWSOCKS_KEY
 
-    parts = urlparse(url)
-    sh_config = dict(server=[parts.hostname],
-                     mode=config.get('shadowsocks', 'mode'),
-                     server_port=int(parts.port),
-                     password=base64.b64decode(parts.username).decode("utf-8").split(':')[1],
-                     timeout=config.getint('shadowsocks', 'timeout'),
-                     method=base64.b64decode(parts.username).decode("utf-8").split(':')[0],
-                     local_address=config.get('shadowsocks', 'local_address'),
-                     local_port=config.getint('shadowsocks', 'local_port'),
-                     fast_open=config.getboolean('shadowsocks', 'fast_open'),
-                     ipv6_first=config.getboolean('shadowsocks', 'ipv6_first'))
+    if context.user_data['shadowsocks']['effective_callback']['action'] == 'add':
+        try:
+            filename = text + '.json'
+            open(filename, 'a').close()
+        except Exception as err:
+            logger.error(f"Error: {err}")
+        else:
+            logger.info(f"{user.full_name} ({user.id}) create config file {filename} done.")
+            await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,
+                                                        message_id=context.user_data['shadowsocks']['effective_callback']['message_id'],
+                                                        reply_markup=InlineKeyboardMarkup(
+                                                            inline_keyboard=[
+                                                                [InlineKeyboardButton(
+                                                                    text="✅",
+                                                                    callback_data="null")]
+                                                            ]))
+            await update.message.reply_text(text=f"Create config file `{filename}` done.",
+                                            reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+            await kdw_keys_shadowsocks(update, context)
+            return KDW_KEYS
+    elif context.user_data['shadowsocks']['effective_callback']['action'] == 'change':
+        pattern = config.get("shadowsocks", "pattern")
+        import re
+        if not re.match(pattern, text):
+            await update.message.reply_text(text=f"Error! Shadowsocks URL doesn't match the pattern!",
+                                            reply_markup=ReplyKeyboardMarkup([['Cancel']], resize_keyboard=True))
+            return SHADOWSOCKS_KEY
 
-    # await update.message.reply_text(text=f'Your parsing data \n{json.dumps(sh_config, indent=2)}',
-    #                                 reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+        parts = urlparse(text)
+        sh_config = dict(server=[parts.hostname],
+                         mode=config.get('shadowsocks', 'mode'),
+                         server_port=int(parts.port),
+                         password=base64.b64decode(parts.username).decode("utf-8").split(':')[1],
+                         timeout=config.getint('shadowsocks', 'timeout'),
+                         method=base64.b64decode(parts.username).decode("utf-8").split(':')[0],
+                         local_address=config.get('shadowsocks', 'local_address'),
+                         local_port=config.getint('shadowsocks', 'local_port'),
+                         fast_open=config.getboolean('shadowsocks', 'fast_open'),
+                         ipv6_first=config.getboolean('shadowsocks', 'ipv6_first'))
 
-    filename = next((item.get("filename") for item in context.user_data['shadowsocks'] if
-                     item.get("message_id") and item["message_id"] == context.user_data['effective_callback_message']),
-                    None)
+        # await update.message.reply_text(text=f'Your parsing data \n{json.dumps(sh_config, indent=2)}',
+        #                                 reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
 
-    with open(filename, 'w') as f:
-        json.dump(sh_config, f, indent=2)
+        filename = next((item.get("filename") for item in context.user_data['shadowsocks']['configs'] if
+                         item.get("message_id") and item["message_id"] == context.user_data['shadowsocks']['effective_callback']['message_id']),
+                        None)
+        with open(filename, 'w') as f:
+            json.dump(sh_config, f, indent=2)
 
-    logger.info("User %s add new shadowsocks config.", user.first_name)
+        logger.info(f"{user.full_name} ({user.id}) config file {filename} changed.")
 
-    await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,
-                                                message_id=context.user_data['effective_callback_message'],
-                                                reply_markup=InlineKeyboardMarkup(
-                                                    inline_keyboard=[
-                                                        [InlineKeyboardButton(
-                                                            text="✅",
-                                                            callback_data="null")]
-                                                    ]))
-    await update.message.reply_text(text="ok",
-                                    reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
-    #await update.callback_query.answer("OK")
-    return KDW_KEYS
+        await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,
+                                                    message_id=context.user_data['shadowsocks']['effective_callback']['message_id'],
+                                                    reply_markup=InlineKeyboardMarkup(
+                                                        inline_keyboard=[
+                                                            [InlineKeyboardButton(
+                                                                text="✅",
+                                                                callback_data="null")]
+                                                        ]))
+        await update.message.reply_text(text=f"Config file `{filename}` changed.",
+                                        reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
+        #await update.callback_query.answer("OK")
+        return KDW_KEYS
+    else:
+        logger.error("Unknown command.")
 
 
 if __name__ == '__main__':
@@ -456,7 +495,7 @@ if __name__ == '__main__':
                  ],
             SHADOWSOCKS_KEY:
                 [MessageHandler(filters.Regex('Cancel'), kdw_keys),
-                 MessageHandler(filters.Text(), decode_shadowsocks_key),
+                 MessageHandler(filters.Text(), operations_shadowsocks_configs),
                  CallbackQueryHandler(callback_buttons)
                  ],
         },

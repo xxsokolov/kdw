@@ -148,7 +148,7 @@ def private_access(f):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     await update.message.reply_text(
-        'Hi, {full_name} ({user_id})!\nI am Botgod!'.format(full_name=user.full_name, user_id=user.id),
+        'Hi, {full_name} ({user_id})!\nI am KDW bot'.format(full_name=user.full_name, user_id=user.id),
         reply_markup=ReplyKeyboardMarkup(start_keyboard, resize_keyboard=True))
     logger.info("Start session {full_name} ({user_id})".format(full_name=user.full_name, user_id=user.id))
     return await status(update, context)
@@ -220,7 +220,7 @@ async def kdw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @private_access
 async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
-    logger.info("{full_name} ({user_id}) entered to the 'Keys' menu.".format(full_name=user.full_name, user_id=user.id))
+    logger.info(f"{user.full_name} ({user.id}) entered to the 'Keys' menu.")
     await update.message.reply_text(text="You are in the menu 'Keys'",
                                     reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard, resize_keyboard=True))
     context.user_data.fromkeys(['menu_shadowsocks_configs', 'menu_trojan_configs', 'menu_vmess_configs'], False)
@@ -231,15 +231,19 @@ async def kdw_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Parses the CallbackQuery and updates the message text."""
     query = update.callback_query
+    user = query.from_user
     if query.data == "null":
         await query.answer("no action")
         return
     callback_data: str = query.data
 
     if 'menu_shadowsocks_configs' in context.user_data and context.user_data['menu_shadowsocks_configs']:
+        filename = next((item.get("filename") for item in context.user_data['shadowsocks'] if
+                         item.get("message_id") and item["message_id"] == update.effective_message.message_id),
+                        None)
         if callback_data == 'view':
-            await update.effective_chat.send_message(f"view json config {callback_data}",
-                                                     reply_to_message_id=update.effective_message.message_id)
+            text = open(filename, 'r').read()
+            await update.effective_chat.send_message(text=text, reply_to_message_id=update.effective_message.message_id)
             await query.answer()
         elif callback_data == 'change':
             # await update.effective_chat.send_message(f"change json config {callback_data[0]}",
@@ -258,18 +262,35 @@ async def callback_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             return SHADOWSOCKS_KEY
         elif callback_data == 'delete':
-            await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="❌",
-                        callback_data="null")]
-                ]))
-            await query.answer("DELETE OK!")
+            try:
+                os.remove(filename)
+            except Exception as err:
+                logger.error(f"Error: {err}")
+            else:
+                await update.effective_message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="❌",
+                            callback_data="null")]
+                    ]))
+                await query.answer("DELETE OK!")
+                logger.info(f"{user.full_name} ({user.id}) delete config file {filename}.")
         elif callback_data == 'add':
             await query.answer()
         elif callback_data == 'cancel':
             context.user_data['menu_shadowsocks_configs'] = False
             await query.answer()
+
+            msgs = [item.get("message_id") for item in context.user_data['shadowsocks']]
+
+            for msg in msgs:
+                await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=msg, reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="×",
+                            callback_data="null")]
+                    ]))
+
             await update.effective_chat.send_message(text="Cancel",
                                                      reply_markup=ReplyKeyboardMarkup(kdw_keys_keyboard,
                                                                                       resize_keyboard=True))
@@ -301,6 +322,8 @@ async def callback_none(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @private_access
 async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    logger.info(f"{user.full_name} ({user.id}) entered to the 'Shadowsocks' menu.")
     files = [f for f in pathlib.Path().glob(config.get('shadowsocks', 'path') + "/*.json")]
     context.user_data['shadowsocks']: list = []
     for file in files:
@@ -317,20 +340,23 @@ async def kdw_keys_shadowsocks(update: Update, context: ContextTypes.DEFAULT_TYP
                                                                             text="🗑️ delete",
                                                                             callback_data="delete")]
                                                                 ]), disable_notification=True)
-        context.user_data['shadowsocks'].append(dict(filename=file, message_id=last_msg.message_id))
+        context.user_data['shadowsocks'].append(dict(filename=file, message_id=last_msg.message_id, add_action=False))
 
     last_msg = await update.message.reply_text(text="What are we doing, boss?",
                                                reply_to_message_id=update.message.message_id,
                                                reply_markup=ReplyKeyboardRemove(),
                                                disable_notification=True)
+
     await last_msg.delete()
 
-    await update.message.reply_text(text=last_msg.text, reply_to_message_id=update.message.message_id,
-                                    reply_markup=InlineKeyboardMarkup(
-                                        inline_keyboard=[
-                                            [InlineKeyboardButton(text="Add new config",
-                                                                  callback_data='add')],
-                                            [InlineKeyboardButton(text="Cancel", callback_data='cancel')]]))
+    last_msg = await update.message.reply_text(text=last_msg.text, reply_to_message_id=update.message.message_id,
+                                               reply_markup=InlineKeyboardMarkup(
+                                                   inline_keyboard=[
+                                                       [InlineKeyboardButton(text="Add new config",
+                                                                             callback_data='add')],
+                                                       [InlineKeyboardButton(text="Cancel", callback_data='cancel')]]))
+
+    context.user_data['shadowsocks'].append(dict(filename=None, message_id=last_msg.message_id, add_action=True))
     context.user_data['menu_shadowsocks_configs'] = True
 
     #return KDW_KEYS
@@ -429,7 +455,7 @@ if __name__ == '__main__':
                  CallbackQueryHandler(callback_buttons),
                  ],
             SHADOWSOCKS_KEY:
-                [MessageHandler(filters.Regex('Cancel'), kdw),
+                [MessageHandler(filters.Regex('Cancel'), kdw_keys),
                  MessageHandler(filters.Text(), decode_shadowsocks_key),
                  CallbackQueryHandler(callback_buttons)
                  ],
@@ -443,11 +469,11 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(callback_none))
     application.add_error_handler(error_handler)
 
-    logger.info("Telegram Bot God botgod.service active (running)")
+    logger.info("Telegram Bot KDW active (running)")
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-    logger.info("Telegram Bot God botgod.service stoping")
+    logger.info("Telegram Bot KDW stoping")
 
 # pattern_shadowsocks = r"(?<![\w-])(ss://[^\s<>#|]+)"
 # pattern_vmess = r"(?<![\w-])(vmess://[^\s<>#|]+)"

@@ -1,0 +1,8 @@
+python-telegram-bot
+requests
+
+# Зависимости для E2E тестирования
+pytest
+pytest-asyncio
+docker
+telethon

@@ -1,0 +1,17 @@
+services:
+  kdw-bot:
+    container_name: kdw_bot_dev
+    
+    build:
+      # Контекст сборки - это родительская директория (корень проекта)
+      context: ..
+      # Путь к Dockerfile относительно контекста сборки
+      dockerfile: ./docker/Dockerfile
+      
+    volumes:
+      # Пробрасываем корень проекта для "живой" разработки
+      - ../:/opt/etc/kdw
+      
+    # Указываем, что .env файл нужно искать в текущей директории (./docker)
+    env_file:
+      - .env

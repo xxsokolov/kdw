@@ -1,6 +1,6 @@
 import os
 from configparser import ConfigParser
-from .shell_utils import run_command_streamed
+from .shell_utils import run_command, run_command_streamed # Импортируем run_command
 
 class Installer:
     """
@@ -28,6 +28,14 @@ class Installer:
 
         if not os.path.exists(self.install_script_path):
             await message.edit_text(f"❌ Ошибка: Установочный скрипт не найден по пути {self.install_script_path}")
+            return
+
+        # Делаем скрипт исполняемым на всякий случай
+        # Используем run_command, так как это простая команда без стриминга
+        chmod_command = f"chmod +x {self.install_script_path}"
+        chmod_return_code, _, chmod_stderr = await run_command(chmod_command)
+        if chmod_return_code != 0:
+            await message.edit_text(f"❌ Не удалось сделать скрипт исполняемым:\n<pre>{chmod_stderr}</pre>", parse_mode='HTML')
             return
 
         # Собираем команду с параметрами из конфига

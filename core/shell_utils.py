@@ -15,8 +15,8 @@ async def run_command(command: str):
 
     return (
         process.returncode,
-        stdout.decode().strip(),
-        stderr.decode().strip()
+        stdout.decode('utf-8', errors='replace').strip(), # Добавлено errors='replace'
+        stderr.decode('utf-8', errors='replace').strip()  # Добавлено errors='replace'
     )
 
 async def run_command_streamed(command: str, update, context, message):
@@ -33,31 +33,28 @@ async def run_command_streamed(command: str, update, context, message):
     last_sent_time = 0
     
     if process.stdout is None:
-        return 1, ""
+        await process.wait()
+        return process.returncode, ""
 
     while True:
         line = await process.stdout.readline()
         if not line:
             break
 
-        decoded_line = line.decode().strip()
+        decoded_line = line.decode('utf-8', errors='replace').strip() # Добавлено errors='replace'
         full_log += decoded_line + "\n"
 
-        # Чтобы не спамить API Telegram, обновляем сообщение не чаще раза в 2 секунды
         current_time = asyncio.get_event_loop().time()
         if current_time - last_sent_time > 2:
             try:
+                # Стримим промежуточный лог
                 await message.edit_text(f"<pre>{full_log}</pre>", parse_mode='HTML')
                 last_sent_time = current_time
             except Exception:
-                # Игнорируем ошибки, если сообщение не изменилось
                 pass
     
-    # Отправляем финальный полный лог
-    try:
-        await message.edit_text(f"<pre>{full_log}</pre>", parse_mode='HTML')
-    except Exception:
-        pass
+    # УДАЛЕНО: Финальное обновление сообщения из run_command_streamed.
+    # Теперь это ответственность вызывающей функции (installer.py).
 
     await process.wait()
     return process.returncode, full_log

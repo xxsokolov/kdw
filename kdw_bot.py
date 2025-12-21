@@ -80,8 +80,12 @@ def private_access(f):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info(f"Start session for {user.full_name} ({user.id})")
-    if await installer.is_installed():
-        await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
+    
+    is_installed_status = await installer.is_installed()
+    logger.info(f"Installer.is_installed() returned: {is_installed_status}") # <-- Добавлен отладочный вывод
+
+    if is_installed_status:
+        await update.message.reply_text(f"👋 Привет, {user.full_name}!\nСистема обхода уже установлена.", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
         return STATUS
     else:
         await update.message.reply_text(f"👋 Привет, {user.full_name}!\nСистема обхода еще не установлена.", reply_markup=ReplyKeyboardMarkup(install_keyboard, resize_keyboard=True))

@@ -31,6 +31,8 @@ default_config_file = "kdw.cfg"
 (
     STATUS,
     INSTALL,
+    CONFIGURE_IPTABLES,
+    AWAIT_SS_PORT,
     BYPASS_MENU,
     KEYS_MENU,
     LISTS_MENU,
@@ -40,7 +42,7 @@ default_config_file = "kdw.cfg"
     AWAIT_SHADOWSOCKS_KEY,
     AWAIT_VMESS_KEY,
     AWAIT_TROJAN_KEY,
-) = range(11)
+) = range(13)
 
 # --- Инициализация ---
 if os.path.isfile(default_config_file):
@@ -58,6 +60,7 @@ key_manager = KeyManager()
 
 # --- Клавиатуры ---
 install_keyboard = [["🚀 Установить систему обхода"]]
+configure_keyboard = [["⚙️ Настроить iptables"]]
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
 bypass_keyboard = [["Ключи", "Списки"], ["Статус служб"], ["🔙 Назад"]]
 keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
@@ -80,13 +83,12 @@ def private_access(f):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info(f"Start session for {user.full_name} ({user.id})")
-    
-    is_installed_status = await installer.is_installed()
-    logger.info(f"Installer.is_installed() returned: {is_installed_status}") # <-- Добавлен отладочный вывод
-
-    if is_installed_status:
-        await update.message.reply_text(f"👋 Привет, {user.full_name}!\nСистема обхода уже установлена.", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
+    if await installer.is_configured():
+        await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
         return STATUS
+    elif await installer.is_installed():
+        await update.message.reply_text("Базовая установка завершена, но система еще не настроена.", reply_markup=ReplyKeyboardMarkup(configure_keyboard, resize_keyboard=True))
+        return CONFIGURE_IPTABLES
     else:
         await update.message.reply_text(f"👋 Привет, {user.full_name}!\nСистема обхода еще не установлена.", reply_markup=ReplyKeyboardMarkup(install_keyboard, resize_keyboard=True))
         return INSTALL
@@ -95,6 +97,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def start_install(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await installer.run_installation(update, context)
     return ConversationHandler.END
+
+@private_access
+async def ask_for_ss_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Пожалуйста, введите порт, на котором будет работать ss-redir (обычно 1080).", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
+    return AWAIT_SS_PORT
+
+@private_access
+async def configure_iptables(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        port = int(update.message.text)
+        success, message = await installer.configure_iptables(port)
+        await update.message.reply_text(message)
+        if success:
+            await update.message.reply_text("Настройка завершена! Пожалуйста, перезапустите бота командой /start.", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+        else:
+            return AWAIT_SS_PORT
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат порта. Пожалуйста, введите число.", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
+        return AWAIT_SS_PORT
 
 @private_access
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -212,7 +234,7 @@ async def ask_for_trojan_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return KEYS_MENU
 
 # --- Обработчик ошибок ---
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
     tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
     tb_string = "".join(tb_list)
@@ -241,6 +263,11 @@ def main() -> None:
         entry_points=[CommandHandler('start', start)],
         states={
             INSTALL: [MessageHandler(filters.Regex('^🚀 Установить систему обхода$'), start_install)],
+            CONFIGURE_IPTABLES: [MessageHandler(filters.Regex('^⚙️ Настроить iptables$'), ask_for_ss_port)],
+            AWAIT_SS_PORT: [
+                MessageHandler(filters.Regex('^Отмена$'), start),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, configure_iptables),
+            ],
             STATUS: [
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
             ],

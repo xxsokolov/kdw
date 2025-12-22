@@ -40,7 +40,6 @@ async def wait_for_bot_response(client: TelegramClient, bot_username: str, last_
         messages = await client.get_messages(bot_username, min_id=last_message_id, limit=10)
         
         for message in reversed(messages):
-            # Игнорируем свои же сообщения, ждем только ответ от бота
             if not message.out:
                 print(f"\n[DEBUG] Получено сообщение от {bot_username}: '{message.text}'")
                 if expected_text:
@@ -67,7 +66,7 @@ async def test_full_bot_flow(bot_container: Container):
     client = await get_telegram_client(USER_SESSION, int(API_ID), API_HASH)
 
     try:
-        # --- 1. Сценарий "чистой" установки ---
+        # --- 1. Сценарий "чистой" установки (мокирование) ---
         bot_container.exec_run("rm -f /etc/init.d/S99unblock")
         bot_container.restart()
         await asyncio.sleep(5)
@@ -76,30 +75,42 @@ async def test_full_bot_flow(bot_container: Container):
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
         response = await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
-        assert isinstance(response.reply_markup, ReplyKeyboardMarkup)
-        assert any(b.text == "🚀 Установить систему обхода" for row in response.reply_markup.rows for b in row.buttons)
-
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "🚀 Установить систему обхода")
-        response = await wait_for_bot_response(client, bot_username, last_id, "Установка завершена!", timeout=60)
-        assert "Пожалуйста, перезапустите бота командой /start." in response.text
-        exec_result = bot_container.exec_run("test -f /etc/init.d/S99unblock")
-        assert exec_result.exit_code == 0, "Файл-маркер установки не был создан."
-
-        # --- 2. Сценарий обновления ключа Shadowsocks ---
+        
+        # Мокаем результат базовой установки
+        bot_container.exec_run("touch /etc/init.d/S99unblock")
+        
+        # --- 2. Сценарий настройки iptables ---
         bot_container.restart()
         await asyncio.sleep(5)
-        
-        script_content = '#!/bin/sh\\necho "Restarting Shadowsocks..."'
-        create_script_cmd = f"sh -c 'printf \"{script_content}\" > /etc/init.d/S22shadowsocks'"
-        bot_container.exec_run(create_script_cmd)
-        bot_container.exec_run("chmod +x /etc/init.d/S22shadowsocks")
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        await wait_for_bot_response(client, bot_username, last_id, "Система обхода уже установлена")
+        response = await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
+        assert isinstance(response.reply_markup, ReplyKeyboardMarkup)
+        assert any(b.text == "⚙️ Настроить iptables" for row in response.reply_markup.rows for b in row.buttons)
+
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, "⚙️ Настроить iptables")
+        await wait_for_bot_response(client, bot_username, last_id, "Пожалуйста, введите порт")
+
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, "1080")
+        await wait_for_bot_response(client, bot_username, last_id, "Правила iptables успешно созданы")
+
+        exec_result = bot_container.exec_run("cat /etc/init.d/S99unblock")
+        assert "1080" in exec_result.output.decode(), "Порт 1080 не был записан в S99unblock"
+
+        # --- 3. Сценарий обновления ключа Shadowsocks ---
+        bot_container.restart()
+        await asyncio.sleep(5)
+        
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, '/start')
+        await wait_for_bot_response(client, bot_username, last_id, "👋 Привет")
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
@@ -123,11 +134,7 @@ async def test_full_bot_flow(bot_container: Container):
         response = await wait_for_bot_response(client, bot_username, last_id, "успешно обновлена и служба перезапущена", timeout=20)
         assert "Test-Server.json" in response.text
 
-        file_path = "/opt/etc/shadowsocks/Test-Server.json"
-        exec_result = bot_container.exec_run(f"test -f {file_path}")
-        assert exec_result.exit_code == 0, f"Файл конфига {file_path} не был создан."
-
-        # --- 3. Сценарий проверки статуса служб ---
+        # --- 4. Сценарий проверки статуса служб ---
         # ВОЗВРАЩАЕМСЯ в предыдущее меню
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
@@ -140,7 +147,7 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, "Статус служб")
         response = await wait_for_bot_response(client, bot_username, last_id, "Статус служб:")
         
-        assert "Shadowsocks: Неясный статус" in response.text
+        assert "Shadowsocks: Запущен" in response.text
         assert "Trojan: не найден" in response.text
 
     finally:

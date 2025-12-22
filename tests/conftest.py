@@ -4,7 +4,6 @@ import os
 import time
 
 # --- Ручная загрузка переменных окружения из .env файла ---
-# Это избавляет от необходимости ставить pytest-dotenv или python-dotenv
 def load_env_vars(env_path):
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
@@ -26,6 +25,10 @@ def docker_client():
 
 @pytest.fixture(scope="session")
 def bot_container(docker_client):
+    """
+    Фикстура, которая собирает и запускает Docker-контейнер с ботом.
+    Монтирует тестовые ассеты для персистентности моков.
+    """
     container = None
     try:
         relative_dockerfile_path = 'docker/Dockerfile'
@@ -37,13 +40,11 @@ def bot_container(docker_client):
             tag="kdw-test-image"
         )
         
-        # Создаем .env, если его нет
         if not os.path.exists(env_path):
             with open(env_path, 'w') as f:
                 f.write("BOT_TOKEN=123:dummy\n")
                 f.write("USER_ID=12345\n")
         
-        # Читаем .env для передачи в Docker, а не в текущее окружение
         def load_env_for_docker(path):
             env_vars = {}
             if os.path.exists(path):
@@ -59,13 +60,22 @@ def bot_container(docker_client):
         if not environment_variables.get("BOT_TOKEN") or not environment_variables.get("USER_ID"):
             pytest.fail(".env файл не содержит BOT_TOKEN или USER_ID.")
 
+        # --- Монтирование тестовых ассетов ---
+        test_assets_path = os.path.join(project_root, 'docker', 'test_assets')
+        volumes = {
+            project_root: {'bind': '/opt/etc/kdw', 'mode': 'rw'},
+            # Монтируем в режиме read-write, чтобы тесты могли создавать файлы
+            os.path.join(test_assets_path, 'init.d'): {'bind': '/etc/init.d', 'mode': 'rw'}
+        }
+        # --- Конец монтирования ---
+
         print("Запускаю контейнер...")
         container = docker_client.containers.run(
             image="kdw-test-image",
             detach=True,
             name="kdw-test-container",
             environment=environment_variables,
-            volumes={project_root: {'bind': '/opt/etc/kdw', 'mode': 'rw'}},
+            volumes=volumes,
             remove=True
         )
         

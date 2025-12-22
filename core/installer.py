@@ -1,6 +1,6 @@
 import os
 from configparser import ConfigParser
-from .shell_utils import run_command, run_command_streamed # Импортируем run_command
+from .shell_utils import run_command, run_command_streamed
 
 class Installer:
     """
@@ -10,7 +10,8 @@ class Installer:
         config = ConfigParser()
         config.read(config_file, encoding='utf-8')
         
-        self.install_marker = "/opt/etc/init.d/S99unblock"
+        # Используем стандартный путь /etc/init.d/
+        self.install_marker = "/etc/init.d/S99unblock"
         self.install_script_path = config.get('installer', 'script_path', fallback='/bin/false')
         self.network_interface = config.get('installer', 'network_interface', fallback='br0')
 
@@ -30,18 +31,14 @@ class Installer:
             await message.edit_text(f"❌ Ошибка: Установочный скрипт не найден по пути {self.install_script_path}")
             return
 
-        # Делаем скрипт исполняемым на всякий случай
-        # Используем run_command, так как это простая команда без стриминга
         chmod_command = f"chmod +x {self.install_script_path}"
         chmod_return_code, _, chmod_stderr = await run_command(chmod_command)
         if chmod_return_code != 0:
             await message.edit_text(f"❌ Не удалось сделать скрипт исполняемым:\n<pre>{chmod_stderr}</pre>", parse_mode='HTML')
             return
 
-        # Собираем команду с параметрами из конфига
         command = f"{self.install_script_path} --interface {self.network_interface}"
 
-        # Запускаем установку и стримим вывод
         await message.edit_text(f"⏳ Запускаю {command}... Это может занять несколько минут.\n\n<pre></pre>", parse_mode='HTML')
         
         return_code, full_log = await run_command_streamed(command, update, context, message)

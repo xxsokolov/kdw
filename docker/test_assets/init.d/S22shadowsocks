@@ -1,0 +1,5 @@
+#!/bin/sh
+# Это мок-скрипт для E2E-тестов
+
+echo "Restarting Shadowsocks (mock)..."
+exit 0

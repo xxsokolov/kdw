@@ -8,6 +8,9 @@ SERVICE_NAMES = {
     "tor": "S35tor",
 }
 
+# Стандартный путь к init-скриптам в OpenWrt и Alpine
+INIT_D_PATH = "/etc/init.d"
+
 class ServiceManager:
     """
     Управляет службами (прокси-клиентами) на роутере.
@@ -19,7 +22,7 @@ class ServiceManager:
         """
         status_report = []
         for name, script in SERVICE_NAMES.items():
-            command = f"/opt/etc/init.d/{script} status"
+            command = f"{INIT_D_PATH}/{script} status"
             return_code, stdout, stderr = await run_command(command)
 
             status_icon = "❓" # Неизвестно
@@ -52,7 +55,7 @@ class ServiceManager:
         if not script_name:
             return False, f"Служба '{service_name}' не найдена."
 
-        command = f"/opt/etc/init.d/{script_name} restart"
+        command = f"{INIT_D_PATH}/{script_name} restart"
         return_code, stdout, stderr = await run_command(command)
 
         if return_code == 0:

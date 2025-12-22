@@ -1,7 +1,7 @@
 # Используем стандартный, надежный образ Alpine Linux
 FROM alpine:latest
 
-# Устанавливаем все необходимые зависимости
+# Устанавливаем только базовые зависимости, НЕ включая пакеты служб
 RUN apk add --no-cache python3 py3-pip git curl jq nano ipset bind-tools
 
 # Устанавливаем рабочую директорию
@@ -10,15 +10,15 @@ WORKDIR /opt/etc/kdw
 # Копируем только requirements.txt для кэширования слоя с зависимостями
 COPY requirements.txt .
 
-# Устанавливаем зависимости Python, используя флаг для обхода защиты PEP 668
+# Устанавливаем зависимости Python
 RUN pip3 install -r requirements.txt --break-system-packages
-RUN echo "--- INSTALLED PYTHON PACKAGES ---" && pip3 list && echo "---------------------------------"
 
 # Копируем все остальные файлы проекта
 COPY . .
 
 # Создаем директории, которые имитируют структуру KeeneticOS
-RUN mkdir -p /opt/etc/init.d /opt/etc/unblock /opt/bin
+# /etc/init.d - стандартный путь для init-скриптов в Alpine/OpenWrt
+RUN mkdir -p /etc/init.d /opt/etc/unblock /opt/bin
 
 # Делаем скрипты исполняемыми
 RUN chmod +x bootstrap.sh

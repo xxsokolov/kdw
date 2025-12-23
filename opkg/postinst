@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script
+# KDW Bot Post-Installation Script (SAFE VERSION)
 
 # --- Functions ---
 echo_step() {
@@ -32,21 +32,17 @@ while [ "$1" != "" ]; do
     shift
 done
 
-# --- 2. Interactive Configuration (if args not provided) ---
+# --- 2. Interactive Configuration ---
 echo_step "Настройка конфигурации..."
 if [ -z "$BOT_TOKEN" ]; then
   echo "Пожалуйста, введите данные для настройки бота:"
-  printf "1. Токен вашего Telegram бота (полученный от @BotFather): "
+  printf "1. Токен вашего Telegram бота: "
   read BOT_TOKEN
-  if [ -z "$BOT_TOKEN" ]; then
-    echo_error "Токен не может быть пустым."
-  fi
+  if [ -z "$BOT_TOKEN" ]; then echo_error "Токен не может быть пустым."; fi
 
-  printf "2. Ваш Telegram User ID (число, можно узнать у @userinfobot): "
+  printf "2. Ваш Telegram User ID: "
   read USER_ID
-  if [ -z "$USER_ID" ]; then
-    echo_error "User ID не может быть пустым."
-  fi
+  if [ -z "$USER_ID" ]; then echo_error "User ID не может быть пустым."; fi
 else
   echo "Используются параметры, переданные при запуске."
 fi
@@ -74,17 +70,14 @@ cat > $CONFIG_FILE << EOF
 [telegram]
 token = $BOT_TOKEN
 access_ids = [$USER_ID]
-
 [installer]
 script_path = ${PROJECT_DIR}/scripts/install.sh
 network_interface = br0
-
 [keenetic]
 host = 127.0.0.1
 port = 80
 user = admin
 password =
-
 [shadowsocks]
 path = /opt/etc/shadowsocks
 file_mask = *.json
@@ -109,18 +102,24 @@ BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
 LOG_FILE="/opt/var/log/kdw_bot.log"
 
 start() {
+    # Проверяем, не запущен ли уже процесс
+    if ps | grep "$BOT_PATH" | grep -v grep > /dev/null; then
+        echo "KDW Bot is already running."
+        return
+    fi
     echo "Starting KDW Bot..."
+    # Запускаем весь цикл в фоне ОДИН РАЗ
     while true; do
         python3 \$BOT_PATH >> \$LOG_FILE 2>&1
-        echo "KDW Bot process exited. Restarting in 5 seconds..." >> \$LOG_FILE
-        sleep 5
+        echo "KDW Bot process exited. Restarting in 15 seconds..." >> \$LOG_FILE
+        sleep 15
     done &
 }
 
 stop() {
     echo "Stopping KDW Bot..."
-    # Универсальный и надежный способ найти и убить процесс
-    PID=\$(ps | grep '$BOT_PATH' | grep -v grep | awk '{print \$1}')
+    # Надежный способ найти и убить процесс
+    PID=\$(ps | grep "$BOT_PATH" | grep -v grep | awk '{print \$1}')
     if [ -n "\$PID" ]; then
         kill \$PID
     fi
@@ -128,7 +127,7 @@ stop() {
 
 case "\$1" in
     start|restart)
-        stop; sleep 1; start
+        stop; sleep 2; start
         ;;
     stop)
         stop

@@ -5,10 +5,13 @@
 
 # --- Functions ---
 echo_step() {
-  echo "➡️  $1"
+  echo "-> $1"
+}
+echo_success() {
+  echo "[OK] $1"
 }
 echo_error() {
-  echo "❌ $1"
+  echo "[ERROR] $1"
   exit 1
 }
 
@@ -56,23 +59,18 @@ TMP_FILE="/tmp/kdw_main.tar.gz"
 
 echo_step "Скачивание последней версии..."
 curl -sL "$REPO_URL" -o "$TMP_FILE"
-if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub."; fi
+if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub. Убедитесь, что curl установлен и есть доступ в интернет."; fi
 
 echo_step "Распаковка и установка файлов в $INSTALL_DIR..."
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 
-# Распаковываем архив напрямую в целевую директорию,
-# отбрасывая верхнюю директорию из архива (KDW-main)
 tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1
 if [ $? -ne 0 ]; then echo_error "Не удалось распаковать архив."; fi
 
-# Очистка временного файла
 rm "$TMP_FILE"
-
 echo_success "Файлы проекта успешно установлены."
 
-# --- Run Post-Install Script ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."

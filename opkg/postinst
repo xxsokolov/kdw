@@ -62,8 +62,8 @@ if [ "$OK_STATUS" != "true" ]; then
   echo "$RESPONSE"
   exit 1
 fi
-BOT_NAME=$(echo $RESPONSE | jq -r '.result.first_name')
-echo_success "Токен верный. Бот: $BOT_NAME"
+BOT_USERNAME=$(echo $RESPONSE | jq -r '.result.username')
+echo_success "Токен верный. Бот: @$BOT_USERNAME"
 
 # --- 4. Create Config File ---
 echo_step "Создание конфигурационного файла kdw.cfg..."
@@ -96,7 +96,6 @@ echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_DIR="/opt/etc/init.d"
 SERVICE_FILE="${SERVICE_DIR}/S99kdwbot"
 
-# Создаем директорию, если она не существует
 mkdir -p "$SERVICE_DIR"
 
 if [ -f "$SERVICE_FILE" ]; then
@@ -136,10 +135,18 @@ EOF
 chmod +x $SERVICE_FILE
 echo_success "Служба создана."
 
-# --- Final ---
+# --- 6. Final ---
 echo_step "Запуск бота..."
 $SERVICE_FILE start
 echo_success "Установка и настройка завершены! Бот запущен."
-echo "Можете начинать общение с ним в Telegram."
+
+# --- 7. Send notification to user ---
+echo_step "Отправка уведомления в Telegram..."
+MESSAGE_TEXT="✅ Установка KDW Bot на вашем роутере успешно завершена!%0A%0AНажмите /start, чтобы начать работу."
+SEND_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${USER_ID}&text=${MESSAGE_TEXT}"
+curl -s "$SEND_URL" > /dev/null
+
+echo_success "Уведомление отправлено. Проверьте личные сообщения от вашего бота."
+echo ""
 
 exit 0

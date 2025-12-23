@@ -1,0 +1,28 @@
+#!/bin/sh
+
+echo "Удаление оставшихся файлов и конфигураций KDW Bot..."
+
+# Удаляем init.d скрипты
+rm -f /etc/init.d/S22shadowsocks
+rm -f /etc/init.d/S22trojan
+rm -f /etc/init.d/S24v2ray
+rm -f /etc/init.d/S35tor
+rm -f /etc/init.d/S56dnsmasq
+rm -f /etc/init.d/S99unblock
+rm -f /etc/init.d/S99kdwbot
+
+# Удаляем созданные конфиги и директории
+rm -rf /opt/etc/shadowsocks
+rm -rf /opt/etc/trojan
+rm -rf /opt/etc/v2ray
+rm -rf /opt/etc/tor
+rm -rf /opt/etc/unblock
+rm -rf /opt/etc/dnsmasq.d
+rm -f /opt/etc/kdw/kdw.cfg
+
+# Важно: не удаляем /opt/etc/kdw, так как opkg сам удалит файлы пакета.
+# Мы удаляем только то, что было создано динамически.
+
+echo "Очистка завершена."
+
+exit 0

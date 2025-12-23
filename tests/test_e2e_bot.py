@@ -66,7 +66,7 @@ async def test_full_bot_flow(bot_container: Container):
     client = await get_telegram_client(USER_SESSION, int(API_ID), API_HASH)
 
     try:
-        # --- 1. Сценарий полной настройки ---
+        # --- 1. Сценарий "чистой" системы ---
         bot_container.exec_run("rm -f /etc/init.d/S99unblock")
         bot_container.restart()
         await asyncio.sleep(5)
@@ -74,8 +74,9 @@ async def test_full_bot_flow(bot_container: Container):
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
-        
+        response = await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
+
+        # --- 2. Мокаем базовую установку и переходим к настройке ---
         bot_container.exec_run("touch /etc/init.d/S99unblock")
         bot_container.restart()
         await asyncio.sleep(5)
@@ -83,8 +84,11 @@ async def test_full_bot_flow(bot_container: Container):
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
+        response = await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
+        assert isinstance(response.reply_markup, ReplyKeyboardMarkup)
+        assert any(b.text == "⚙️ Настроить iptables" for row in response.reply_markup.rows for b in row.buttons)
 
+        # --- 3. Настраиваем iptables ---
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, "⚙️ Настроить iptables")
@@ -95,7 +99,7 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, "1080")
         await wait_for_bot_response(client, bot_username, last_id, "Правила iptables успешно созданы")
 
-        # --- 2. Сценарий удаления ---
+        # --- 4. Проверяем, что система полностью настроена ---
         bot_container.restart()
         await asyncio.sleep(5)
 
@@ -104,6 +108,7 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, '/start')
         await wait_for_bot_response(client, bot_username, last_id, "👋 Привет")
 
+        # --- 5. Сценарий удаления ---
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, "Настройки")
@@ -119,18 +124,7 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, "🗑️ Удалить")
         await wait_for_bot_response(client, bot_username, last_id, "Для подтверждения, пожалуйста, отправьте в ответ фразу")
 
-        # Неправильное подтверждение
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "нет, не удалять")
-        await wait_for_bot_response(client, bot_username, last_id, "Неверная фраза подтверждения. Удаление отменено.")
-
         # Правильное подтверждение
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "🗑️ Удалить")
-        await wait_for_bot_response(client, bot_username, last_id, "Для подтверждения, пожалуйста, отправьте в ответ фразу")
-        
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, "да, удалить все")

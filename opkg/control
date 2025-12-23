@@ -1,0 +1,8 @@
+Package: kdw-bot
+Version: 1.0.0
+Depends: python3, python3-pip, git, jq
+Section: net
+Architecture: all
+Maintainer: xxsokolov
+Source: https://github.com/xxsokolov/KDW
+Description: Telegram bot for Keenetic bypass management.

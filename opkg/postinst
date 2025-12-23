@@ -1,0 +1,123 @@
+#!/bin/sh
+
+# KDW Bot Post-Installation Script
+
+# --- Functions ---
+echo_step() {
+  echo "➡️  $1"
+}
+echo_success() {
+  echo "✅ $1"
+}
+echo_error() {
+  echo "❌ $1"
+  exit 1
+}
+
+# --- Start ---
+echo_step "Завершение установки KDW Bot..."
+sleep 1
+
+# --- Interactive Configuration ---
+echo "Пожалуйста, введите данные для настройки бота:"
+printf "1. Токен вашего Telegram бота (полученный от @BotFather): "
+read BOT_TOKEN
+if [ -z "$BOT_TOKEN" ]; then
+  echo_error "Токен не может быть пустым."
+fi
+
+printf "2. Ваш Telegram User ID (число, можно узнать у @userinfobot): "
+read USER_ID
+if [ -z "$USER_ID" ]; then
+  echo_error "User ID не может быть пустым."
+fi
+
+# --- Validate Token ---
+echo_step "Проверка токена бота..."
+API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
+RESPONSE=$(curl -s $API_URL)
+OK_STATUS=$(echo $RESPONSE | jq -r '.ok')
+
+if [ "$OK_STATUS" != "true" ]; then
+  echo_error "Неверный токен. Telegram API вернул ошибку:"
+  echo "$RESPONSE"
+  exit 1
+fi
+BOT_NAME=$(echo $RESPONSE | jq -r '.result.first_name')
+echo_success "Токен верный. Бот: $BOT_NAME"
+
+# --- Create Config File ---
+echo_step "Создание конфигурационного файла kdw.cfg..."
+# Путь к файлам проекта после установки через opkg
+PROJECT_DIR="/opt/etc/kdw"
+CONFIG_FILE="${PROJECT_DIR}/kdw.cfg"
+
+cat > $CONFIG_FILE << EOF
+[telegram]
+token = $BOT_TOKEN
+access_ids = [$USER_ID]
+
+[installer]
+script_path = ${PROJECT_DIR}/scripts/install.sh
+network_interface = br0
+
+[keenetic]
+host = 127.0.0.1
+port = 80
+user = admin
+password =
+
+[shadowsocks]
+path = /opt/etc/shadowsocks
+file_mask = *.json
+EOF
+echo_success "Конфигурационный файл создан."
+
+# --- Create Service ---
+echo_step "Создание службы автозапуска S99kdwbot..."
+SERVICE_FILE="/etc/init.d/S99kdwbot"
+cat > $SERVICE_FILE << EOF
+#!/bin/sh
+
+# KDW Bot Service
+BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
+LOG_FILE="/opt/var/log/kdw_bot.log"
+
+start() {
+    echo "Starting KDW Bot..."
+    while true; do
+        python3 \$BOT_PATH >> \$LOG_FILE 2>&1
+        echo "KDW Bot process exited. Restarting in 5 seconds..." >> \$LOG_FILE
+        sleep 5
+    done &
+}
+
+stop() {
+    echo "Stopping KDW Bot..."
+    kill \$(pidof -x kdw_bot.py)
+}
+
+case "\$1" in
+    start|restart)
+        stop
+        sleep 1
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+esac
+EOF
+chmod +x $SERVICE_FILE
+echo_success "Служба создана."
+
+# --- Final ---
+echo_step "Запуск бота..."
+$SERVICE_FILE start
+echo_success "Установка и настройка завершены! Бот запущен."
+echo "Можете начинать общение с ним в Telegram."
+
+exit 0

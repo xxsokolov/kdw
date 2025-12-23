@@ -4,14 +4,11 @@
 # https://github.com/xxsokolov/KDW
 #
 # Этот скрипт скачивает репозиторий и запускает основной установщик (postinst),
-# имитируя установку OPKG-пакета.
+# передавая ему все полученные аргументы.
 
 # --- Functions ---
 echo_step() {
   echo "➡️  $1"
-}
-echo_success() {
-  echo "✅ $1"
 }
 echo_error() {
   echo "❌ $1"
@@ -33,13 +30,17 @@ echo_step "Клонирование репозитория KDW Bot в /opt/etc/k
 rm -rf /opt/etc/kdw
 git clone https://github.com/xxsokolov/KDW.git /opt/etc/kdw
 
-if [ ! -f /opt/etc/kdw/opkg/postinst ]; then
-    echo_error "Не удалось найти основной скрипт установки /opt/etc/kdw/opkg/postinst"
+POSTINST_SCRIPT="/opt/etc/kdw/opkg/postinst"
+
+if [ ! -f "$POSTINST_SCRIPT" ]; then
+    echo_error "Не удалось найти основной скрипт установки $POSTINST_SCRIPT"
 fi
 
 # --- Run Post-Install Script ---
 echo_step "Запуск основного скрипта установки..."
-chmod +x /opt/etc/kdw/opkg/postinst
-sh /opt/etc/kdw/opkg/postinst
+chmod +x "$POSTINST_SCRIPT"
+
+# Передаем все аргументы, полученные bootstrap.sh, в postinst
+sh "$POSTINST_SCRIPT" "$@"
 
 exit 0

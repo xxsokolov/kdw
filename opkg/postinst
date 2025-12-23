@@ -14,25 +14,44 @@ echo_error() {
   exit 1
 }
 
-# --- Start ---
-echo_step "Завершение установки KDW Bot..."
-sleep 1
+# --- 1. Argument Parsing ---
+BOT_TOKEN=""
+USER_ID=""
 
-# --- Interactive Configuration ---
-echo "Пожалуйста, введите данные для настройки бота:"
-printf "1. Токен вашего Telegram бота (полученный от @BotFather): "
-read BOT_TOKEN
+while [ "$1" != "" ]; do
+    case $1 in
+        --token)
+            shift
+            BOT_TOKEN=$1
+            ;;
+        --user-id)
+            shift
+            USER_ID=$1
+            ;;
+    esac
+    shift
+done
+
+# --- 2. Interactive Configuration (if args not provided) ---
+echo_step "Настройка конфигурации..."
 if [ -z "$BOT_TOKEN" ]; then
-  echo_error "Токен не может быть пустым."
+  echo "Пожалуйста, введите данные для настройки бота:"
+  printf "1. Токен вашего Telegram бота (полученный от @BotFather): "
+  read BOT_TOKEN
+  if [ -z "$BOT_TOKEN" ]; then
+    echo_error "Токен не может быть пустым."
+  fi
+
+  printf "2. Ваш Telegram User ID (число, можно узнать у @userinfobot): "
+  read USER_ID
+  if [ -z "$USER_ID" ]; then
+    echo_error "User ID не может быть пустым."
+  fi
+else
+  echo "Используются параметры, переданные при запуске."
 fi
 
-printf "2. Ваш Telegram User ID (число, можно узнать у @userinfobot): "
-read USER_ID
-if [ -z "$USER_ID" ]; then
-  echo_error "User ID не может быть пустым."
-fi
-
-# --- Validate Token ---
+# --- 3. Validate Token ---
 echo_step "Проверка токена бота..."
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
 RESPONSE=$(curl -s $API_URL)
@@ -46,9 +65,8 @@ fi
 BOT_NAME=$(echo $RESPONSE | jq -r '.result.first_name')
 echo_success "Токен верный. Бот: $BOT_NAME"
 
-# --- Create Config File ---
+# --- 4. Create Config File ---
 echo_step "Создание конфигурационного файла kdw.cfg..."
-# Путь к файлам проекта после установки через opkg
 PROJECT_DIR="/opt/etc/kdw"
 CONFIG_FILE="${PROJECT_DIR}/kdw.cfg"
 
@@ -73,16 +91,14 @@ file_mask = *.json
 EOF
 echo_success "Конфигурационный файл создан."
 
-# --- Create Service ---
+# --- 5. Create Service ---
 echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_FILE="/etc/init.d/S99kdwbot"
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
-
 # KDW Bot Service
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
 LOG_FILE="/opt/var/log/kdw_bot.log"
-
 start() {
     echo "Starting KDW Bot..."
     while true; do
@@ -91,17 +107,13 @@ start() {
         sleep 5
     done &
 }
-
 stop() {
     echo "Stopping KDW Bot..."
     kill \$(pidof -x kdw_bot.py)
 }
-
 case "\$1" in
     start|restart)
-        stop
-        sleep 1
-        start
+        stop; sleep 1; start
         ;;
     stop)
         stop

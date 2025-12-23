@@ -65,12 +65,24 @@ echo_step "Распаковка и установка файлов в $INSTALL_D
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 
-tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1
+# Распаковываем архив во временную директорию
+tar -xzf "$TMP_FILE" -C /tmp
 if [ $? -ne 0 ]; then echo_error "Не удалось распаковать архив."; fi
 
+# Находим имя распакованной папки (оно может меняться)
+EXTRACTED_DIR=$(tar -tzf "$TMP_FILE" | head -1 | cut -f1 -d"/")
+if [ -z "$EXTRACTED_DIR" ]; then echo_error "Не удалось определить имя директории в архиве."; fi
+
+# Перемещаем содержимое распакованной папки в целевую директорию
+mv /tmp/${EXTRACTED_DIR}/* "$INSTALL_DIR/"
+
+# Очистка временных файлов
 rm "$TMP_FILE"
+rm -rf "/tmp/$EXTRACTED_DIR"
+
 echo_success "Файлы проекта успешно установлены."
 
+# --- Run Post-Install Script ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."

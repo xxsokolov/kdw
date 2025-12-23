@@ -10,3 +10,4 @@ venv/
 # Файлы Python
 __pycache__/
 *.pyc
+/persitencebot

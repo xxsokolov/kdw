@@ -27,7 +27,7 @@ def docker_client():
 def bot_container(docker_client):
     """
     Фикстура, которая собирает и запускает Docker-контейнер с ботом.
-    Монтирует тестовые ассеты для персистентности моков.
+    Монтирует только необходимые директории для безопасности.
     """
     container = None
     try:
@@ -60,12 +60,13 @@ def bot_container(docker_client):
         if not environment_variables.get("BOT_TOKEN") or not environment_variables.get("USER_ID"):
             pytest.fail(".env файл не содержит BOT_TOKEN или USER_ID.")
 
-        # --- Монтирование тестовых ассетов ---
-        test_assets_path = os.path.join(project_root, 'docker', 'test_assets')
+        # --- Безопасное монтирование ---
         volumes = {
-            project_root: {'bind': '/opt/etc/kdw', 'mode': 'rw'},
-            # Монтируем в режиме read-write, чтобы тесты могли создавать файлы
-            os.path.join(test_assets_path, 'init.d'): {'bind': '/etc/init.d', 'mode': 'rw'}
+            os.path.join(project_root, 'core'): {'bind': '/opt/etc/kdw/core', 'mode': 'ro'},
+            os.path.join(project_root, 'scripts'): {'bind': '/opt/etc/kdw/scripts', 'mode': 'ro'},
+            os.path.join(project_root, 'kdw_bot.py'): {'bind': '/opt/etc/kdw/kdw_bot.py', 'mode': 'ro'},
+            # НЕ монтируем kdw.cfg.example, чтобы бот использовал переменные окружения
+            os.path.join(project_root, 'docker', 'test_assets', 'init.d'): {'bind': '/etc/init.d', 'mode': 'rw'}
         }
         # --- Конец монтирования ---
 
@@ -75,8 +76,7 @@ def bot_container(docker_client):
             detach=True,
             name="kdw-test-container",
             environment=environment_variables,
-            volumes=volumes,
-            remove=True
+            volumes=volumes
         )
         
         time.sleep(5)
@@ -90,8 +90,8 @@ def bot_container(docker_client):
 
     finally:
         if container:
-            print("\nОстанавливаю контейнер...")
+            print("\nОстанавливаю и удаляю контейнер...")
             try:
-                container.stop()
+                container.remove(force=True)
             except docker.errors.NotFound:
                 pass

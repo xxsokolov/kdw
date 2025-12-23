@@ -1,15 +1,12 @@
 # Файл с секретными переменными окружения
 docker/.env
-
+kdw.cfg
 # Директории PyCharm
 .idea/
-
 # Директория с виртуальным окружением
 venv/
-
 # Кэш Pytest
 .pytest_cache/
-
 # Файлы Python
 __pycache__/
 *.pyc

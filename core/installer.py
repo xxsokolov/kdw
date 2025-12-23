@@ -13,6 +13,10 @@ class Installer:
         self.install_marker = "/etc/init.d/S99unblock"
         self.install_script_path = config.get('installer', 'script_path', fallback='/bin/false')
         self.network_interface = config.get('installer', 'network_interface', fallback='br0')
+        
+        # Пути к новым скриптам
+        self.uninstall_script_path = "/opt/etc/kdw/scripts/uninstall.sh"
+        self.reinstall_script_path = "/opt/etc/kdw/scripts/reinstall.sh"
 
     async def is_installed(self) -> bool:
         """
@@ -67,8 +71,38 @@ iptables -t nat -A PREROUTING -i {self.network_interface} -m set --match-set unb
         try:
             with open(self.install_marker, 'w') as f:
                 f.write(script_content)
-
+            
             await run_command(f"chmod +x {self.install_marker}")
             return True, "✅ Правила iptables успешно созданы."
         except Exception as e:
             return False, f"❌ Не удалось создать файл {self.install_marker}: {e}"
+
+    async def run_uninstallation(self, update, context):
+        """
+        Выполняет полное удаление системы.
+        """
+        message = await update.message.reply_text("🚀 Начинаю полное удаление...")
+        
+        if not os.path.exists(self.uninstall_script_path):
+            await message.edit_text(f"❌ Ошибка: Скрипт удаления не найден по пути {self.uninstall_script_path}")
+            return
+
+        return_code, full_log = await run_command_streamed(self.uninstall_script_path, update, context, message)
+
+        if return_code == 0:
+            await message.edit_text(f"✅ Система полностью удалена.\n\n<pre>{full_log}</pre>\n\nБот больше не будет работать. Чтобы установить его заново, используйте bootstrap.sh.", parse_mode='HTML')
+        else:
+            await message.edit_text(f"❌ Удаление завершилось с ошибкой.\n\n<pre>{full_log}</pre>", parse_mode='HTML')
+
+    async def run_reinstallation(self, update, context):
+        """
+        Выполняет переустановку системы.
+        """
+        message = await update.message.reply_text("🚀 Начинаю переустановку...")
+
+        if not os.path.exists(self.reinstall_script_path):
+            await message.edit_text(f"❌ Ошибка: Скрипт переустановки не найден по пути {self.reinstall_script_path}")
+            return
+        
+        await run_command_streamed(self.reinstall_script_path, update, context, message)
+        # Финальное сообщение будет отправлено из bootstrap.sh

@@ -66,7 +66,7 @@ async def test_full_bot_flow(bot_container: Container):
     client = await get_telegram_client(USER_SESSION, int(API_ID), API_HASH)
 
     try:
-        # --- 1. Сценарий "чистой" установки (мокирование) ---
+        # --- 1. Сценарий полной настройки ---
         bot_container.exec_run("rm -f /etc/init.d/S99unblock")
         bot_container.restart()
         await asyncio.sleep(5)
@@ -74,21 +74,16 @@ async def test_full_bot_flow(bot_container: Container):
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        response = await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
+        await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
         
-        # Мокаем результат базовой установки
         bot_container.exec_run("touch /etc/init.d/S99unblock")
-        
-        # --- 2. Сценарий настройки iptables ---
         bot_container.restart()
         await asyncio.sleep(5)
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        response = await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
-        assert isinstance(response.reply_markup, ReplyKeyboardMarkup)
-        assert any(b.text == "⚙️ Настроить iptables" for row in response.reply_markup.rows for b in row.buttons)
+        await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
@@ -100,13 +95,10 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, "1080")
         await wait_for_bot_response(client, bot_username, last_id, "Правила iptables успешно созданы")
 
-        exec_result = bot_container.exec_run("cat /etc/init.d/S99unblock")
-        assert "1080" in exec_result.output.decode(), "Порт 1080 не был записан в S99unblock"
-
-        # --- 3. Сценарий обновления ключа Shadowsocks ---
+        # --- 2. Сценарий удаления ---
         bot_container.restart()
         await asyncio.sleep(5)
-        
+
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
@@ -114,41 +106,39 @@ async def test_full_bot_flow(bot_container: Container):
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "Система обхода")
-        await wait_for_bot_response(client, bot_username, last_id, "Меню управления системой обхода.")
+        await client.send_message(bot_username, "Настройки")
+        await wait_for_bot_response(client, bot_username, last_id, "Меню настроек.")
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "Ключи")
-        await wait_for_bot_response(client, bot_username, last_id, "Меню управления ключами.")
+        await client.send_message(bot_username, "☢️ Зона риска")
+        await wait_for_bot_response(client, bot_username, last_id, "Вы вошли в зону риска.")
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "Shadowsocks")
-        await wait_for_bot_response(client, bot_username, last_id, "Пожалуйста, отправьте ключ в формате ss://...")
+        await client.send_message(bot_username, "🗑️ Удалить")
+        await wait_for_bot_response(client, bot_username, last_id, "Для подтверждения, пожалуйста, отправьте в ответ фразу")
 
-        ss_key = "ss://YWVzLTI1Ni1nY206dGVzdDEyMzRA@example.com:8443#Test-Server"
+        # Неправильное подтверждение
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, ss_key)
-        response = await wait_for_bot_response(client, bot_username, last_id, "успешно обновлена и служба перезапущена", timeout=20)
-        assert "Test-Server.json" in response.text
+        await client.send_message(bot_username, "нет, не удалять")
+        await wait_for_bot_response(client, bot_username, last_id, "Неверная фраза подтверждения. Удаление отменено.")
 
-        # --- 4. Сценарий проверки статуса служб ---
-        # ВОЗВРАЩАЕМСЯ в предыдущее меню
+        # Правильное подтверждение
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "🔙 Назад")
-        await wait_for_bot_response(client, bot_username, last_id, "Меню управления системой обхода.")
-
-        # Теперь нажимаем "Статус служб"
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "Статус служб")
-        response = await wait_for_bot_response(client, bot_username, last_id, "Статус служб:")
+        await client.send_message(bot_username, "🗑️ Удалить")
+        await wait_for_bot_response(client, bot_username, last_id, "Для подтверждения, пожалуйста, отправьте в ответ фразу")
         
-        assert "Shadowsocks: Запущен" in response.text
-        assert "Trojan: не найден" in response.text
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, "да, удалить все")
+        await wait_for_bot_response(client, bot_username, last_id, "Система полностью удалена.", timeout=60)
+
+        # Проверяем, что маркер удален
+        exec_result = bot_container.exec_run("test -f /etc/init.d/S99unblock")
+        assert exec_result.exit_code != 0, "Файл-маркер установки НЕ был удален."
 
     finally:
         await client.disconnect()

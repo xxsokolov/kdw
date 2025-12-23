@@ -42,7 +42,10 @@ default_config_file = "kdw.cfg"
     AWAIT_SHADOWSOCKS_KEY,
     AWAIT_VMESS_KEY,
     AWAIT_TROJAN_KEY,
-) = range(13)
+    SETTINGS_MENU,
+    DANGER_ZONE,
+    AWAIT_UNINSTALL_CONFIRMATION,
+) = range(16)
 
 # --- Инициализация ---
 if os.path.isfile(default_config_file):
@@ -62,6 +65,8 @@ key_manager = KeyManager()
 install_keyboard = [["🚀 Установить систему обхода"]]
 configure_keyboard = [["⚙️ Настроить iptables"]]
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
+settings_keyboard = [["☢️ Зона риска"], ["🔙 Назад"]]
+danger_zone_keyboard = [["🔄 Переустановить"], ["🗑️ Удалить"], ["🔙 Назад"]]
 bypass_keyboard = [["Ключи", "Списки"], ["Статус служб"], ["🔙 Назад"]]
 keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
@@ -233,6 +238,43 @@ async def ask_for_trojan_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("Эта функция еще не реализована.", reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
     return KEYS_MENU
 
+# --- Новые обработчики для меню настроек ---
+@private_access
+async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Меню настроек.", reply_markup=ReplyKeyboardMarkup(settings_keyboard, resize_keyboard=True))
+    return SETTINGS_MENU
+
+@private_access
+async def menu_danger_zone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Вы вошли в зону риска. Эти действия могут нарушить работу системы.", reply_markup=ReplyKeyboardMarkup(danger_zone_keyboard, resize_keyboard=True))
+    return DANGER_ZONE
+
+@private_access
+async def start_reinstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await installer.run_reinstallation(update, context)
+    return ConversationHandler.END
+
+@private_access
+async def ask_for_uninstall_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = """⚠️ **ВНИМАНИЕ!**
+Это действие **полностью удалит** бота, все его настройки, созданные файлы и установленные пакеты (`shadowsocks`, `dnsmasq` и т.д.).
+
+**Это действие необратимо.**
+
+Для подтверждения, пожалуйста, отправьте в ответ фразу:
+`да, удалить все`"""
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
+    return AWAIT_UNINSTALL_CONFIRMATION
+
+@private_access
+async def handle_uninstall_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message.text == "да, удалить все":
+        await installer.run_uninstallation(update, context)
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("Неверная фраза подтверждения. Удаление отменено.", reply_markup=ReplyKeyboardMarkup(danger_zone_keyboard, resize_keyboard=True))
+        return DANGER_ZONE
+
 # --- Обработчик ошибок ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
@@ -270,6 +312,20 @@ def main() -> None:
             ],
             STATUS: [
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
+                MessageHandler(filters.Regex('^Настройки$'), menu_settings),
+            ],
+            SETTINGS_MENU: [
+                MessageHandler(filters.Regex('^☢️ Зона риска$'), menu_danger_zone),
+                MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
+            ],
+            DANGER_ZONE: [
+                MessageHandler(filters.Regex('^🔄 Переустановить$'), start_reinstall),
+                MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_for_uninstall_confirmation),
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
+            ],
+            AWAIT_UNINSTALL_CONFIRMATION: [
+                MessageHandler(filters.Regex('^Отмена$'), menu_danger_zone),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_uninstall_confirmation),
             ],
             BYPASS_MENU: [
                 MessageHandler(filters.Regex('^Ключи$'), menu_keys),

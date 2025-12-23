@@ -53,6 +53,7 @@ fi
 
 # --- 3. Validate Token ---
 echo_step "Проверка токена бота..."
+# Предполагаем, что curl и jq уже установлены
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
 RESPONSE=$(curl -s "$API_URL")
 OK_STATUS=$(echo $RESPONSE | jq -r '.ok')

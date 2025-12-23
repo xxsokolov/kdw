@@ -2,9 +2,6 @@
 
 # KDW Bot Installer (Bootstrap)
 # https://github.com/xxsokolov/KDW
-#
-# Этот скрипт скачивает архив с исходным кодом, распаковывает его
-# и запускает основной установщик (postinst).
 
 # --- Functions ---
 echo_step() {
@@ -15,25 +12,15 @@ echo_error() {
   exit 1
 }
 
-# --- Default values ---
-ACTION="install" # Действие по умолчанию
-
 # --- Argument Parsing ---
+ACTION="install"
 POSTINST_ARGS=""
 while [ "$1" != "" ]; do
     case $1 in
-        --install)
-            ACTION="install"
-            ;;
-        --reinstall)
-            ACTION="reinstall"
-            ;;
-        --uninstall)
-            ACTION="uninstall"
-            ;;
-        *)
-            POSTINST_ARGS="$POSTINST_ARGS $1"
-            ;;
+        --install) ACTION="install" ;;
+        --reinstall) ACTION="reinstall" ;;
+        --uninstall) ACTION="uninstall" ;;
+        *) POSTINST_ARGS="$POSTINST_ARGS $1" ;;
     esac
     shift
 done
@@ -58,10 +45,9 @@ if [ "$ACTION" = "reinstall" ]; then
 fi
 
 echo_step "Запуск установки KDW Bot..."
-opkg update > /dev/null
-if ! command -v jq > /dev/null; then opkg install jq; fi
-if ! command -v curl > /dev/null; then opkg install curl; fi
+# Проверяем наличие базовых утилит
 if ! command -v tar > /dev/null; then opkg install tar; fi
+if ! command -v git > /dev/null; then opkg install git; fi
 
 INSTALL_DIR="/opt/etc/kdw"
 REPO_URL="https://github.com/xxsokolov/KDW/archive/refs/heads/main.tar.gz"
@@ -70,7 +56,7 @@ TMP_DIR="/tmp/KDW-main"
 
 echo_step "Скачивание последней версии..."
 curl -sL "$REPO_URL" -o "$TMP_FILE"
-if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub."; fi
+if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub. Убедитесь, что curl установлен и есть доступ в интернет."; fi
 
 echo_step "Распаковка и установка файлов в $INSTALL_DIR..."
 rm -rf "$INSTALL_DIR"

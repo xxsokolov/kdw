@@ -8,8 +8,8 @@ SERVICE_NAMES = {
     "tor": "S35tor",
 }
 
-# Стандартный путь к init-скриптам в OpenWrt и Alpine
-INIT_D_PATH = "/etc/init.d"
+# Стандартный путь к init-скриптам в Entware
+INIT_D_PATH = "/opt/etc/init.d" # <--- ИСПРАВЛЕН ПУТЬ
 
 class ServiceManager:
     """

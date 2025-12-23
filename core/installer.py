@@ -10,11 +10,10 @@ class Installer:
         config = ConfigParser()
         config.read(config_file, encoding='utf-8')
         
-        self.install_marker = "/etc/init.d/S99unblock"
+        self.install_marker = "/opt/etc/init.d/S99unblock" # <--- ИСПРАВЛЕН ПУТЬ
         self.install_script_path = config.get('installer', 'script_path', fallback='/bin/false')
         self.network_interface = config.get('installer', 'network_interface', fallback='br0')
         
-        # Пути к новым скриптам
         self.uninstall_script_path = "/opt/etc/kdw/scripts/uninstall.sh"
         self.reinstall_script_path = "/opt/etc/kdw/scripts/reinstall.sh"
 
@@ -105,4 +104,3 @@ iptables -t nat -A PREROUTING -i {self.network_interface} -m set --match-set unb
             return
         
         await run_command_streamed(self.reinstall_script_path, update, context, message)
-        # Финальное сообщение будет отправлено из bootstrap.sh

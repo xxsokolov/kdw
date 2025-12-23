@@ -8,22 +8,22 @@ echo "--- KDW Uninstaller ---"
 # --- 1. Остановка служб ---
 echo "[1/4] Остановка всех служб..."
 # Используем `if -f` для безопасного вызова, если файл не существует
-if [ -f /etc/init.d/S22shadowsocks ]; then /etc/init.d/S22shadowsocks stop >/dev/null 2>&1; fi
-if [ -f /etc/init.d/S22trojan ]; then /etc/init.d/S22trojan stop >/dev/null 2>&1; fi
-if [ -f /etc/init.d/S24v2ray ]; then /etc/init.d/S24v2ray stop >/dev/null 2>&1; fi
-if [ -f /etc/init.d/S35tor ]; then /etc/init.d/S35tor stop >/dev/null 2>&1; fi
-if [ -f /etc/init.d/S56dnsmasq ]; then /etc/init.d/S56dnsmasq stop >/dev/null 2>&1; fi
+if [ -f /opt/etc/init.d/S22shadowsocks ]; then /opt/etc/init.d/S22shadowsocks stop >/dev/null 2>&1; fi
+if [ -f /opt/etc/init.d/S22trojan ]; then /opt/etc/init.d/S22trojan stop >/dev/null 2>&1; fi
+if [ -f /opt/etc/init.d/S24v2ray ]; then /opt/etc/init.d/S24v2ray stop >/dev/null 2>&1; fi
+if [ -f /opt/etc/init.d/S35tor ]; then /opt/etc/init.d/S35tor stop >/dev/null 2>&1; fi
+if [ -f /opt/etc/init.d/S56dnsmasq ]; then /opt/etc/init.d/S56dnsmasq stop >/dev/null 2>&1; fi
 echo "Службы остановлены."
 
 # --- 2. Удаление файлов и директорий ---
 echo "[2/4] Удаление конфигурационных файлов и скриптов..."
-rm -f /etc/init.d/S22shadowsocks
-rm -f /etc/init.d/S22trojan
-rm -f /etc/init.d/S24v2ray
-rm -f /etc/init.d/S35tor
-rm -f /etc/init.d/S56dnsmasq
-rm -f /etc/init.d/S99unblock
-rm -f /etc/init.d/S99kdwbot # Удаляем скрипт автозапуска самого бота
+rm -f /opt/etc/init.d/S22shadowsocks
+rm -f /opt/etc/init.d/S22trojan
+rm -f /opt/etc/init.d/S24v2ray
+rm -f /opt/etc/init.d/S35tor
+rm -f /opt/etc/init.d/S56dnsmasq
+rm -f /opt/etc/init.d/S99unblock
+rm -f /opt/etc/init.d/S99kdwbot
 
 # Удаляем только созданные конфиги и списки, а не всю папку /opt/etc/kdw
 rm -rf /opt/etc/shadowsocks
@@ -32,7 +32,7 @@ rm -rf /opt/etc/v2ray
 rm -rf /opt/etc/tor
 rm -rf /opt/etc/unblock
 rm -rf /opt/etc/dnsmasq.d
-rm -f /opt/etc/kdw/kdw.cfg # Удаляем созданный конфиг
+rm -f /opt/etc/kdw/kdw.cfg
 
 echo "Файлы и директории удалены."
 

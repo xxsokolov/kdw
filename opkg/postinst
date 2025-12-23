@@ -93,7 +93,11 @@ echo_success "Конфигурационный файл создан."
 
 # --- 5. Create Service ---
 echo_step "Создание службы автозапуска S99kdwbot..."
-SERVICE_FILE="/etc/init.d/S99kdwbot"
+SERVICE_DIR="/opt/etc/init.d"
+SERVICE_FILE="${SERVICE_DIR}/S99kdwbot"
+
+# Создаем директорию, если она не существует
+mkdir -p "$SERVICE_DIR"
 
 if [ -f "$SERVICE_FILE" ]; then
     sh "$SERVICE_FILE" stop

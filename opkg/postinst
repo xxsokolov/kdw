@@ -100,7 +100,6 @@ mkdir -p "$SERVICE_DIR"
 
 if [ -f "$SERVICE_FILE" ]; then
     sh "$SERVICE_FILE" stop
-    rm -f "$SERVICE_FILE"
 fi
 
 cat > $SERVICE_FILE << EOF
@@ -108,6 +107,7 @@ cat > $SERVICE_FILE << EOF
 # KDW Bot Service
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
 LOG_FILE="/opt/var/log/kdw_bot.log"
+
 start() {
     echo "Starting KDW Bot..."
     while true; do
@@ -116,10 +116,16 @@ start() {
         sleep 5
     done &
 }
+
 stop() {
     echo "Stopping KDW Bot..."
-    kill \$(pidof -x kdw_bot.py)
+    # Универсальный и надежный способ найти и убить процесс
+    PID=\$(ps | grep '$BOT_PATH' | grep -v grep | awk '{print \$1}')
+    if [ -n "\$PID" ]; then
+        kill \$PID
+    fi
 }
+
 case "\$1" in
     start|restart)
         stop; sleep 1; start
@@ -138,15 +144,13 @@ echo_success "Служба создана."
 # --- 6. Final ---
 echo_step "Запуск бота..."
 $SERVICE_FILE start
-echo_success "Установка и настройка завершены! Бот запущен."
 
-# --- 7. Send notification to user ---
-echo_step "Отправка уведомления в Telegram..."
-MESSAGE_TEXT="✅ Установка KDW Bot на вашем роутере успешно завершена!%0A%0AНажмите /start, чтобы начать работу."
-SEND_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${USER_ID}&text=${MESSAGE_TEXT}"
-curl -s "$SEND_URL" #> /dev/null
-
-echo_success "Уведомление отправлено. Проверьте личные сообщения от вашего бота."
+echo ""
+echo_success "Установка и настройка завершены!"
+echo ""
+echo "--- Что дальше? ---"
+echo "1. Откройте Telegram и найдите вашего бота: @${BOT_USERNAME}"
+echo "2. Отправьте ему команду /start, чтобы появилось главное меню."
 echo ""
 
 exit 0

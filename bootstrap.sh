@@ -45,36 +45,34 @@ if [ "$ACTION" = "reinstall" ]; then
 fi
 
 echo_step "Запуск установки KDW Bot..."
-# Проверяем наличие базовых утилит
+opkg update > /dev/null
+if ! command -v curl > /dev/null; then opkg install curl; fi
+if ! command -v jq > /dev/null; then opkg install jq; fi
 if ! command -v tar > /dev/null; then opkg install tar; fi
-if ! command -v git > /dev/null; then opkg install git; fi
 
 INSTALL_DIR="/opt/etc/kdw"
 REPO_URL="https://github.com/xxsokolov/KDW/archive/refs/heads/main.tar.gz"
 TMP_FILE="/tmp/kdw_main.tar.gz"
-TMP_DIR="/tmp/KDW-main"
 
 echo_step "Скачивание последней версии..."
 curl -sL "$REPO_URL" -o "$TMP_FILE"
-if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub. Убедитесь, что curl установлен и есть доступ в интернет."; fi
+if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub."; fi
 
 echo_step "Распаковка и установка файлов в $INSTALL_DIR..."
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-tar -xzf "$TMP_FILE" -C /tmp
+
+# Распаковываем архив напрямую в целевую директорию,
+# отбрасывая верхнюю директорию из архива (KDW-main)
+tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1
 if [ $? -ne 0 ]; then echo_error "Не удалось распаковать архив."; fi
 
-cp -r ${TMP_DIR}/core ${INSTALL_DIR}/
-cp -r ${TMP_DIR}/scripts ${INSTALL_DIR}/
-cp -r ${TMP_DIR}/opkg ${INSTALL_DIR}/
-cp ${TMP_DIR}/kdw_bot.py ${INSTALL_DIR}/
-cp ${TMP_DIR}/kdw.cfg.example ${INSTALL_DIR}/
-cp ${TMP_DIR}/requirements.txt ${INSTALL_DIR}/
-
+# Очистка временного файла
 rm "$TMP_FILE"
-rm -rf "$TMP_DIR"
+
 echo_success "Файлы проекта успешно установлены."
 
+# --- Run Post-Install Script ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."

@@ -54,7 +54,7 @@ fi
 # --- 3. Validate Token ---
 echo_step "Проверка токена бота..."
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
-RESPONSE=$(curl -s $API_URL)
+RESPONSE=$(curl -s "$API_URL")
 OK_STATUS=$(echo $RESPONSE | jq -r '.ok')
 
 if [ "$OK_STATUS" != "true" ]; then
@@ -94,6 +94,12 @@ echo_success "Конфигурационный файл создан."
 # --- 5. Create Service ---
 echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_FILE="/etc/init.d/S99kdwbot"
+
+if [ -f "$SERVICE_FILE" ]; then
+    sh "$SERVICE_FILE" stop
+    rm -f "$SERVICE_FILE"
+fi
+
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
 # KDW Bot Service

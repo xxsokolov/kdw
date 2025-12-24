@@ -97,6 +97,7 @@ if [ "$ACTION" = "reinstall" ]; then
         fi
     fi
 
+    echo_step "Удаляеме старую версию KDW Bot..."
     rm -rf "$INSTALL_DIR"
     echo_success "Старая версия удалена."
 

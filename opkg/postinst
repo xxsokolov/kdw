@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (SAFE VERSION)
+# KDW Bot Post-Installation Script (SAFE VERSION 2)
 
 # --- Functions ---
 echo_step() {
@@ -97,32 +97,30 @@ fi
 
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
-# KDW Bot Service
+# KDW Bot Service (Safe Version)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
+PID_FILE="/var/run/kdw_bot.pid"
 LOG_FILE="/opt/var/log/kdw_bot.log"
 
 start() {
-    # Проверяем, не запущен ли уже процесс
-    if ps | grep "$BOT_PATH" | grep -v grep > /dev/null; then
+    if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then
         echo "KDW Bot is already running."
         return
     fi
     echo "Starting KDW Bot..."
-    # Запускаем весь цикл в фоне ОДИН РАЗ
-    while true; do
-        python3 \$BOT_PATH >> \$LOG_FILE 2>&1
-        echo "KDW Bot process exited. Restarting in 15 seconds..." >> \$LOG_FILE
-        sleep 15
-    done &
+    # Запускаем бот в фоне и сохраняем его PID
+    python3 \$BOT_PATH >> \$LOG_FILE 2>&1 &
+    echo \$! > \$PID_FILE
 }
 
 stop() {
-    echo "Stopping KDW Bot..."
-    # Надежный способ найти и убить процесс
-    PID=\$(ps | grep "$BOT_PATH" | grep -v grep | awk '{print \$1}')
-    if [ -n "\$PID" ]; then
-        kill \$PID
+    if [ ! -f "\$PID_FILE" ]; then
+        echo "KDW Bot is not running (PID file not found)."
+        return
     fi
+    echo "Stopping KDW Bot..."
+    kill \$(cat \$PID_FILE)
+    rm -f \$PID_FILE
 }
 
 case "\$1" in

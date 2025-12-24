@@ -25,7 +25,9 @@ from core.list_manager import ListManager
 from core.key_manager import KeyManager
 
 # --- Глобальные переменные и константы ---
-default_config_file = "kdw.cfg"
+# Определяем путь к конфиг-файлу относительно расположения самого скрипта
+script_dir = os.path.dirname(os.path.abspath(__file__))
+default_config_file = os.path.join(script_dir, "kdw.cfg")
 
 # Состояния для ConversationHandler
 (
@@ -56,7 +58,7 @@ else:
     sys.exit(1)
 
 logger = Log(debug=False).log
-installer = Installer()
+installer = Installer(default_config_file)
 service_manager = ServiceManager()
 list_manager = ListManager()
 key_manager = KeyManager()

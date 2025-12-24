@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (SAFE VERSION 5 - DYNAMIC PATH)
+# KDW Bot Post-Installation Script (SAFE VERSION 6)
 
 # --- Functions ---
 echo_step() {
@@ -50,7 +50,7 @@ fi
 # --- 3. Validate Token & Dependencies ---
 echo_step "Проверка токена и зависимостей..."
 if ! command -v python3 > /dev/null; then echo_error "Python3 не найден. Убедитесь, что пакет 'python3' установлен."; fi
-PYTHON_EXEC=$(command -v python3) # <--- ДИНАМИЧЕСКИ НАХОДИМ ПУТЬ
+PYTHON_EXEC=$(command -v python3)
 
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
 RESPONSE=$(curl -s "$API_URL")
@@ -104,7 +104,7 @@ cat > $SERVICE_FILE << EOF
 #!/bin/sh
 # KDW Bot Service (Safe Version)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
-PYTHON_EXEC="$PYTHON_EXEC" # <--- ВПИСЫВАЕМ НАЙДЕННЫЙ ПУТЬ
+PYTHON_EXEC="$PYTHON_EXEC"
 PID_FILE="/var/run/kdw_bot.pid"
 LOG_FILE="${LOG_DIR}/kdw_bot.log"
 
@@ -123,8 +123,16 @@ stop() {
         echo "KDW Bot is not running (PID file not found)."
         return
     fi
-    echo "Stopping KDW Bot..."
-    kill \$(cat \$PID_FILE)
+
+    PID=\$(cat \$PID_FILE)
+    if ! ps | grep -q "^\s*\$PID\s"; then
+        echo "KDW Bot is not running (stale PID file found)."
+        rm -f \$PID_FILE
+        return
+    fi
+
+    echo "Stopping KDW Bot (PID: \$PID)..."
+    kill \$PID
     rm -f \$PID_FILE
 }
 

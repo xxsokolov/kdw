@@ -45,7 +45,11 @@ done
 # --- Action: Uninstall ---
 if [ "$ACTION" = "uninstall" ]; then
     echo_step "Запуск удаления KDW Bot..."
-    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
+    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then
+         echo_step "Остановка службы KDW Bot..."
+         sh "${INSTALL_DIR}/opkg/prerm"
+         echo_success "Служба остановлена."
+    fi
 
     echo "Удаление файлов и директорий..."
     [ -f /opt/etc/init.d/S99kdwbot ] && rm -f /opt/etc/init.d/S99kdwbot && echo "  - /opt/etc/init.d/S99kdwbot"
@@ -58,7 +62,11 @@ fi
 
 # --- Action: Install / Reinstall ---
 if [ "$ACTION" = "reinstall" ]; then
-    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
+    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then
+         echo_step "Остановка службы KDW Bot..."
+         sh "${INSTALL_DIR}/opkg/prerm"
+         echo_success "Служба остановлена."
+    fi
     echo_step "Запуск переустановки KDW Bot..."
 
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then

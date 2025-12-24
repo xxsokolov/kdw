@@ -98,9 +98,9 @@ LOG_DIR="/opt/var/log"
 mkdir -p "$SERVICE_DIR"
 mkdir -p "$LOG_DIR"
 
-if [ -f "$SERVICE_FILE" ]; then
-    sh "$SERVICE_FILE" stop
-fi
+#if [ -f "$SERVICE_FILE" ]; then
+#    sh "$SERVICE_FILE" stop
+#fi
 
 cat > $SERVICE_FILE << EOF
 #!/bin/sh

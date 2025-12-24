@@ -1,48 +1,50 @@
+import os
 import logging
-import sys
+from logging import Logger
 
-class CustomFormatter(logging.Formatter):
-    grey = '\x1b[38;21m'
-    green = '\x1b[32m'
-    blue = '\x1b[38;5;39m'
-    yellow = '\x1b[38;5;226m'
-    red = '\x1b[31m'
-    bold_red = '\x1b[38;5;196m'
-    reset = '\x1b[0m'
+class KeeneticLogger(Logger):
+    """
+    Кастомный логгер, который пишет в системный журнал Keenetic через утилиту logmsg.
+    """
+    def __init__(self, name, level=logging.NOTSET):
+        super().__init__(name, level)
 
-    def __init__(self, fmt):
-        super().__init__()
-        self.fmt = fmt
-        self.FORMATS = {
-            logging.DEBUG: self.green + self.fmt + self.reset,
-            logging.INFO: self.blue + self.fmt + self.reset,
-            logging.WARNING: self.yellow + self.fmt + self.reset,
-            logging.ERROR: self.red + self.fmt + self.reset,
-            logging.CRITICAL: self.bold_red + self.fmt + self.reset
-        }
-
-    def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
-
+    def _log(self, level, msg, args, exc_info=None, extra=None, stack_info=False, stacklevel=1):
+        # Преобразуем уровень logging в уровень logmsg
+        if level >= logging.ERROR:
+            log_level = 'err'
+        elif level >= logging.WARNING:
+            log_level = 'warn'
+        else:
+            log_level = 'info'
+        
+        # Форматируем сообщение
+        if args:
+            msg = msg % args
+        
+        # Очищаем сообщение от кавычек, чтобы не сломать shell-команду
+        safe_msg = msg.replace('"', "'").replace('`', "'")
+        
+        # Формируем и выполняем команду
+        command = f'logmsg {log_level} "KDW-Bot: {safe_msg}"'
+        try:
+            os.system(command)
+        except Exception:
+            # Если что-то пошло не так, просто печатаем в консоль
+            print(f"KDW-Bot ({log_level}): {msg}")
 
 class Log:
     def __init__(self, debug=False):
-        if debug:
-            self.log_level = logging.DEBUG
-        else:
-            self.log_level = logging.INFO
-
-        global_format = ("[%(asctime)s] - PID:%(process)s - %(name)s - %(filename)s:%(lineno)d - %(levelname)s: %("
-                         "message)s")
-        self.log = logging.getLogger(None if debug else __name__)
-        self.log.setLevel(self.log_level)
+        # Заменяем стандартный класс логгера на наш кастомный
+        logging.setLoggerClass(KeeneticLogger)
         
-        stdout_handler = logging.StreamHandler(sys.stdout)
-        stdout_handler.setLevel(self.log_level)
-        stdout_handler.setFormatter(CustomFormatter(fmt=global_format))
-        self.log.addHandler(stdout_handler)
+        self.log = logging.getLogger(__name__)
+        
+        if debug:
+            self.log.setLevel(logging.DEBUG)
+        else:
+            self.log.setLevel(logging.INFO)
 
-    def get_level_name(self):
-        return logging.getLevelName(self.log.getEffectiveLevel())
+        # Убираем все стандартные обработчики, так как мы пишем напрямую через os.system
+        for handler in self.log.handlers[:]:
+            self.log.removeHandler(handler)

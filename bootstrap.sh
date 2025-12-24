@@ -5,6 +5,7 @@
 
 # --- Configuration ---
 INSTALL_DIR="/opt/etc/kdw"
+VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/tmp/kdw_repo"
 
@@ -54,7 +55,7 @@ fi
 
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка ключевых зависимостей ---
+# --- 1. Установка системных зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
 opkg install python3 python3-pip curl jq git git-http
@@ -81,10 +82,14 @@ cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 3. Установка Python зависимостей ---
-echo_step "Установка и обновление Python-библиотек..."
-# Используем --upgrade для приведения библиотек в соответствие с requirements.txt
-pip3 install --upgrade -r ${INSTALL_DIR}/requirements.txt --break-system-packages
+# --- 3. Создание и установка зависимостей в VENV ---
+echo_step "Создание виртуального окружения Python..."
+python3 -m venv "$VENV_DIR"
+if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
+echo_success "Виртуальное окружение создано в $VENV_DIR"
+
+echo_step "Установка Python-библиотек в виртуальное окружение..."
+${VENV_DIR}/bin/pip install --upgrade -r ${INSTALL_DIR}/requirements.txt
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 

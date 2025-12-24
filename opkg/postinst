@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (FINAL SAFE VERSION)
+# KDW Bot Post-Installation Script (SAFE, VENV-aware)
 
 # --- Functions ---
 echo_step() {
@@ -49,8 +49,8 @@ fi
 
 # --- 3. Validate Token & Dependencies ---
 echo_step "Проверка токена и зависимостей..."
-if ! command -v python3 > /dev/null; then echo_error "Python3 не найден. Убедитесь, что пакет 'python3' установлен."; fi
-PYTHON_EXEC=$(command -v python3)
+if ! command -v curl > /dev/null; then echo_error "curl не найден. Убедитесь, что пакет 'curl' установлен."; fi
+if ! command -v jq > /dev/null; then echo_error "jq не найден. Убедитесь, что пакет 'jq' установлен."; fi
 
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
 RESPONSE=$(curl -s "$API_URL")
@@ -92,6 +92,7 @@ echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_DIR="/opt/etc/init.d"
 SERVICE_FILE="${SERVICE_DIR}/S99kdwbot"
 LOG_DIR="/opt/var/log"
+VENV_PYTHON="${PROJECT_DIR}/venv/bin/python"
 
 mkdir -p "$SERVICE_DIR"
 mkdir -p "$LOG_DIR"
@@ -102,42 +103,36 @@ fi
 
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
-# KDW Bot Service (Safe Version)
+# KDW Bot Service (VENV-aware)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
-PYTHON_EXEC="$PYTHON_EXEC"
+PYTHON_EXEC="$VENV_PYTHON"
 PID_FILE="/var/run/kdw_bot.pid"
 LOG_FILE="${LOG_DIR}/kdw_bot.log"
 
-log_message() {
-    # Форматируем сообщение, как в Python-логгере
-    echo "\$(date '+%Y-%m-%d %H:%M:%S,%3N') - \$1 - \$2" >> \$LOG_FILE
-}
-
 start() {
     if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then
-        log_message "INFO" "KDW Bot is already running."
+        echo "KDW Bot is already running."
         return
     fi
-    log_message "INFO" "Starting KDW Bot..."
-    # Запускаем бот в фоне и сохраняем его PID
+    echo "Starting KDW Bot..."
     \$PYTHON_EXEC \$BOT_PATH >> \$LOG_FILE 2>&1 &
     echo \$! > \$PID_FILE
 }
 
 stop() {
     if [ ! -f "\$PID_FILE" ]; then
-        log_message "INFO" "KDW Bot is not running (PID file not found)."
+        echo "KDW Bot is not running (PID file not found)."
         return
     fi
 
     PID=\$(cat \$PID_FILE)
     if ! ps | grep -q "^\s*\$PID\s"; then
-        log_message "WARNING" "KDW Bot is not running (stale PID file found)."
+        echo "KDW Bot is not running (stale PID file found)."
         rm -f \$PID_FILE
         return
     fi
 
-    log_message "INFO" "Stopping KDW Bot (PID: \$PID)..."
+    echo "Stopping KDW Bot (PID: \$PID)..."
     kill \$PID
     rm -f \$PID_FILE
 }
@@ -160,7 +155,7 @@ echo_success "Служба создана."
 # --- 6. Final ---
 echo_step "Запуск бота..."
 $SERVICE_FILE start
-sleep 5 # Даем боту время на запуск
+sleep 5
 
 # --- 7. Проверка успешного запуска ---
 echo_step "Проверка статуса запущенного бота..."

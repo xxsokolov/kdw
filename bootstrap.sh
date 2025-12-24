@@ -28,6 +28,7 @@ echo_error() {
 
 # --- Argument Parsing ---
 ACTION="install"
+RECREATE_VENV="true" # По умолчанию всегда пересоздаем venv
 POSTINST_ARGS=""
 while [ "$1" != "" ]; do
     case $1 in
@@ -52,8 +53,9 @@ fi
 # --- Action: Install / Reinstall ---
 if [ "$ACTION" = "reinstall" ]; then
     echo_step "Запуск переустановки KDW Bot..."
+
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
-        printf "Найден существующий файл конфигурации. Использовать его для новой установки? (y/n): "
+        printf "Найден существующий файл конфигурации. Использовать его? (y/n): "
         read -r use_existing_config
         if [ "$use_existing_config" = "y" ] || [ "$use_existing_config" = "Y" ]; then
             echo_step "Сохранение существующей конфигурации..."
@@ -67,9 +69,24 @@ if [ "$ACTION" = "reinstall" ]; then
         fi
     fi
 
+    if [ -d "$VENV_DIR" ]; then
+        printf "Найдено существующее виртуальное окружение. Пересоздать его? (y/n): "
+        read -r recreate_venv_choice
+        if [ "$recreate_venv_choice" = "n" ] || [ "$recreate_venv_choice" = "N" ]; then
+            RECREATE_VENV="false"
+        fi
+    fi
+
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
     if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
-    rm -rf "$INSTALL_DIR"
+
+    # Удаляем все, КРОМЕ venv, если пользователь решил его оставить
+    if [ "$RECREATE_VENV" = "false" ]; then
+        echo_step "Сохранение виртуального окружения..."
+        find "$INSTALL_DIR" -mindepth 1 ! -name 'venv' -exec rm -rf {} +
+    else
+        rm -rf "$INSTALL_DIR"
+    fi
     echo_success "Старая версия удалена."
 fi
 
@@ -83,28 +100,30 @@ if [ $? -ne 0 ]; then echo_error "Не удалось установить ба�
 echo_success "Системные зависимости установлены."
 
 # --- 2. Проверка и установка модуля VENV ---
-echo_step "Проверка модуля venv..."
-if ! python3 -m venv --help > /dev/null 2>&1; then
-    echo "  -> Модуль venv не найден. Попытка ручной установки..."
+if [ "$RECREATE_VENV" = "true" ]; then
+    echo_step "Проверка модуля venv..."
+    if ! python3 -m venv --help > /dev/null 2>&1; then
+        echo "  -> Модуль venv не найден. Попытка ручной установки..."
 
-    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
 
-    if [ -z "$PY_LIB_PATH" ]; then echo_error "Не удалось определить путь к библиотекам Python."; fi
+        if [ -z "$PY_LIB_PATH" ]; then echo_error "Не удалось определить путь к библиотекам Python."; fi
 
-    echo "  -> Клонирование исходного кода CPython v${PY_VER} в $CPYTHON_SRC_DIR..."
-    rm -rf "$CPYTHON_SRC_DIR"
-    git clone --depth=1 --branch="${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
-    if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
+        echo "  -> Клонирование исходного кода CPython v${PY_VER} в $CPYTHON_SRC_DIR..."
+        rm -rf "$CPYTHON_SRC_DIR"
+        git clone --depth=1 --branch="${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
+        if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
 
-    echo "  -> Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
-    cp -r "${CPYTHON_SRC_DIR}/Lib/venv" "$PY_LIB_PATH/"
-    cp -r "${CPYTHON_SRC_DIR}/Lib/ensurepip" "$PY_LIB_PATH/"
+        echo "  -> Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
+        cp -r "${CPYTHON_SRC_DIR}/Lib/venv" "$PY_LIB_PATH/"
+        cp -r "${CPYTHON_SRC_DIR}/Lib/ensurepip" "$PY_LIB_PATH/"
 
-    rm -rf "$CPYTHON_SRC_DIR"
-    echo_success "Модуль venv успешно установлен."
-else
-    echo_success "Модуль venv уже доступен."
+        rm -rf "$CPYTHON_SRC_DIR"
+        echo_success "Модуль venv успешно установлен."
+    else
+        echo_success "Модуль venv уже доступен."
+    fi
 fi
 
 # --- 3. Клонирование и выборочное копирование ---
@@ -114,7 +133,7 @@ git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
 echo_step "Копирование рабочих файлов в $INSTALL_DIR..."
-rm -rf "$INSTALL_DIR"
+# Создаем директорию, если она не существует (важно при первой установке)
 mkdir -p "$INSTALL_DIR"
 
 cp -r ${TMP_REPO_DIR}/core "$INSTALL_DIR/"
@@ -128,20 +147,23 @@ rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
 # --- 4. Создание и установка зависимостей в VENV ---
-VENV_DIR="${INSTALL_DIR}/venv"
-echo_step "Создание виртуального окружения Python..."
-python3 -m venv "$VENV_DIR"
-if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
-echo_success "Виртуальное окружение создано в $VENV_DIR"
+if [ "$RECREATE_VENV" = "true" ]; then
+    echo_step "Создание виртуального окружения Python..."
+    python3 -m venv "$VENV_DIR"
+    if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
+    echo_success "Виртуальное окружение создано в $VENV_DIR"
 
-echo_step "Обновление pip в виртуальном окружении..."
-${VENV_DIR}/bin/python -m pip install --upgrade pip
-if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
+    echo_step "Обновление pip в виртуальном окружении..."
+    ${VENV_DIR}/bin/python -m pip install --upgrade pip
+    if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
 
-echo_step "Установка Python-библиотек в виртуальное окружение..."
-${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-packages
-if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
-echo_success "Python-библиотеки установлены."
+    echo_step "Установка Python-библиотек в виртуальное окружение..."
+    ${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-packages
+    if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
+    echo_success "Python-библиотеки установлены."
+else
+    echo_step "Пропуск создания виртуального окружения."
+fi
 
 # --- 5. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"

@@ -90,7 +90,8 @@ if ! python3 -m venv --help > /dev/null 2>&1; then
 
     echo "  -> Клонирование исходного кода CPython v${PY_VER}..."
     rm -rf "$CPYTHON_SRC_DIR"
-    git clone --depth=1 --branch="v${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
+    # Используем правильное имя ветки (например, "3.11" вместо "v3.11")
+    git clone --depth=1 --branch="${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
     if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
 
     echo "  -> Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."

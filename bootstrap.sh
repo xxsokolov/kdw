@@ -126,7 +126,13 @@ cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 4. Создание и установка зависимостей в VENV ---
+# --- 4. Установка прав на выполнение ---
+echo_step "Установка прав на выполнение для скриптов..."
+chmod +x ${INSTALL_DIR}/scripts/*.sh
+chmod +x ${INSTALL_DIR}/opkg/postinst
+echo_success "Права на выполнение установлены."
+
+# --- 5. Установка Python зависимостей ---
 VENV_DIR="${INSTALL_DIR}/venv"
 echo_step "Создание виртуального окружения Python..."
 python3 -m venv "$VENV_DIR"
@@ -142,14 +148,13 @@ ${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-pac
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 
-# --- 5. Запуск скрипта настройки ---
+# --- 6. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."
 fi
 
 echo_step "Запуск основного скрипта настройки..."
-chmod +x "$POSTINST_SCRIPT"
 sh "$POSTINST_SCRIPT" $POSTINST_ARGS
 
 exit 0

@@ -17,10 +17,12 @@ echo_step() {
   echo "-> $1"
 }
 echo_success() {
-  echo "[OK] $1"
+  # Green color
+  printf "\033[0;32m[OK] %s\033[0m\n" "$1"
 }
 echo_error() {
-  echo "[ERROR] $1"
+  # Red color
+  printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"
   rm -rf "$TMP_REPO_DIR"
   rm -rf "$CPYTHON_SRC_DIR"
   exit 1
@@ -44,8 +46,12 @@ done
 if [ "$ACTION" = "uninstall" ]; then
     echo_step "Запуск удаления KDW Bot..."
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
-    if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
-    rm -rf "$INSTALL_DIR"
+
+    echo "Удаление файлов и директорий..."
+    [ -f /opt/etc/init.d/S99kdwbot ] && rm -f /opt/etc/init.d/S99kdwbot && echo "  - /opt/etc/init.d/S99kdwbot"
+    [ -f /opt/etc/init.d/S99unblock ] && rm -f /opt/etc/init.d/S99unblock && echo "  - /opt/etc/init.d/S99unblock"
+    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR" && echo "  - $INSTALL_DIR (директория проекта)"
+
     echo_success "KDW Bot полностью удален."
     exit 0
 fi
@@ -90,6 +96,7 @@ if [ "$ACTION" = "reinstall" ]; then
 
     echo_step "Удаляеме старую версию KDW Bot..."
     rm -rf "$INSTALL_DIR"
+    echo_success "Старая версия удалена."
     echo_step "Создаем новую рабочую директорию..."
     mkdir -p "$INSTALL_DIR"
 
@@ -97,9 +104,9 @@ if [ "$ACTION" = "reinstall" ]; then
         echo_step "Восстановление виртуального окружения из резервной копии..."
         tar -xzf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR"
         rm "$VENV_BACKUP_FILE"
+        echo_success "Виртуальное окружение восстановлено."
     fi
 
-    echo_success "Старая версия удалена."
 fi
 
 echo_step "Запуск установки KDW Bot..."

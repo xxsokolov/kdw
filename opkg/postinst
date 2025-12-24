@@ -1,16 +1,18 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (FINAL, venv-aware)
+# KDW Bot Post-Installation Script (FINAL, syslog-aware)
 
 # --- Functions ---
 echo_step() {
   echo "-> $1"
 }
 echo_success() {
-  echo "[OK] $1"
+  # Green color
+  printf "\033[0;32m[OK] %s\033[0m\n" "$1"
 }
 echo_error() {
-  echo "[ERROR] $1"
+  # Red color
+  printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"
   exit 1
 }
 
@@ -46,7 +48,6 @@ fi
 # --- 3. Validate Dependencies & Token ---
 echo_step "Проверка токена и зависимостей..."
 if [ -z "$PYTHON_EXEC" ]; then
-    # Если путь не передан, пытаемся найти его сами
     if ! command -v python3 > /dev/null; then echo_error "Python3 не найден."; fi
     PYTHON_EXEC=$(command -v python3)
 fi
@@ -92,8 +93,10 @@ echo_success "Конфигурационный файл создан."
 echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_DIR="/opt/etc/init.d"
 SERVICE_FILE="${SERVICE_DIR}/S99kdwbot"
+LOG_DIR="/opt/var/log"
 
 mkdir -p "$SERVICE_DIR"
+mkdir -p "$LOG_DIR"
 
 if [ -f "$SERVICE_FILE" ]; then
     sh "$SERVICE_FILE" stop
@@ -101,10 +104,11 @@ fi
 
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
-# KDW Bot Service (VENV-aware)
+# KDW Bot Service (syslog-aware with fallback)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
-PYTHON_EXEC="$PYTHON_EXEC" # <--- ПУТЬ ПЕРЕДАЕТСЯ ИЗ BOOTSTRAP.SH
+PYTHON_EXEC="$PYTHON_EXEC"
 PID_FILE="/var/run/kdw_bot.pid"
+LOG_FILE="${LOG_DIR}/kdw_bot.log" # Файл для stderr и traceback
 
 start() {
     if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then
@@ -112,7 +116,8 @@ start() {
         return
     fi
     echo "Starting KDW Bot..."
-    \$PYTHON_EXEC \$BOT_PATH &
+    # Основной лог идет в syslog, а ошибки и traceback - в файл.
+    \$PYTHON_EXEC \$BOT_PATH >> \$LOG_FILE 2>&1 &
     echo \$! > \$PID_FILE
 }
 
@@ -161,10 +166,13 @@ if [ -f /var/run/kdw_bot.pid ] && ps | grep -q "^\s*$(cat /var/run/kdw_bot.pid)\
     echo ""
     echo "--- Что дальше? ---"
     echo "1. Откройте Telegram и найдите вашего бота: @${BOT_USERNAME}"
-    echo "2. Отправьте ему команду /start, чтобы появилось главное меню."
+    echo "2. Отправьте ему команду /start."
+    echo "3. Следите за логами в системном журнале Keenetic."
+    echo "4. Для отладки ошибок смотрите файл: /opt/var/log/kdw_bot.log"
     echo ""
 else
-    echo_error "Не удалось запустить процесс бота. Проверьте системный журнал Keenetic для получения подробной информации."
+    echo_error "Не удалось запустить процесс бота. Пожалуйста, проверьте лог-файл:"
+    echo "   less /opt/var/log/kdw_bot.log"
     exit 1
 fi
 

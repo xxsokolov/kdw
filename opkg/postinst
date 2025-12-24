@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (SAFE VERSION 2)
+# KDW Bot Post-Installation Script (SAFE VERSION 4)
 
 # --- Functions ---
 echo_step() {
@@ -88,8 +88,10 @@ echo_success "Конфигурационный файл создан."
 echo_step "Создание службы автозапуска S99kdwbot..."
 SERVICE_DIR="/opt/etc/init.d"
 SERVICE_FILE="${SERVICE_DIR}/S99kdwbot"
+LOG_DIR="/opt/var/log"
 
 mkdir -p "$SERVICE_DIR"
+mkdir -p "$LOG_DIR"
 
 if [ -f "$SERVICE_FILE" ]; then
     sh "$SERVICE_FILE" stop
@@ -99,8 +101,9 @@ cat > $SERVICE_FILE << EOF
 #!/bin/sh
 # KDW Bot Service (Safe Version)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
+PYTHON_EXEC="/opt/bin/python3"
 PID_FILE="/var/run/kdw_bot.pid"
-LOG_FILE="/opt/var/log/kdw_bot.log"
+LOG_FILE="${LOG_DIR}/kdw_bot.log"
 
 start() {
     if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then
@@ -109,7 +112,7 @@ start() {
     fi
     echo "Starting KDW Bot..."
     # Запускаем бот в фоне и сохраняем его PID
-    python3 \$BOT_PATH >> \$LOG_FILE 2>&1 &
+    \$PYTHON_EXEC \$BOT_PATH >> \$LOG_FILE 2>&1 &
     echo \$! > \$PID_FILE
 }
 

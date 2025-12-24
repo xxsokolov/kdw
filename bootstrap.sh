@@ -58,6 +58,7 @@ fi
 
 # --- Action: Install / Reinstall ---
 if [ "$ACTION" = "reinstall" ]; then
+    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
     echo_step "Запуск переустановки KDW Bot..."
 
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
@@ -85,19 +86,20 @@ if [ "$ACTION" = "reinstall" ]; then
         fi
     fi
 
-    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
-
     VENV_BACKUP_FILE="/tmp/kdw_venv.tar.gz"
     if [ "$RECREATE_VENV" = "false" ] && [ -d "$VENV_DIR" ]; then
         echo_step "Создание резервной копии виртуального окружения..."
         tar -czf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR" venv
-        if [ $? -ne 0 ]; then echo_error "Не удалось создать архив venv."; fi
+        if [ $? -ne 0 ]; then
+            echo_error "Не удалось создать архив venv."
+        else
+            echo_success "Резервная копия venv создана."
+        fi
     fi
 
-    echo_step "Удаляеме старую версию KDW Bot..."
     rm -rf "$INSTALL_DIR"
     echo_success "Старая версия удалена."
-    echo_step "Создаем новую рабочую директорию..."
+
     mkdir -p "$INSTALL_DIR"
 
     if [ -f "$VENV_BACKUP_FILE" ]; then
@@ -106,7 +108,6 @@ if [ "$ACTION" = "reinstall" ]; then
         rm "$VENV_BACKUP_FILE"
         echo_success "Виртуальное окружение восстановлено."
     fi
-
 fi
 
 echo_step "Запуск установки KDW Bot..."

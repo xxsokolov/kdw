@@ -47,6 +47,24 @@ fi
 # --- Action: Install / Reinstall ---
 if [ "$ACTION" = "reinstall" ]; then
     echo_step "Запуск переустановки KDW Bot..."
+
+    if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
+        printf "Найден существующий файл конфигурации. Использовать его для новой установки? (y/n): "
+        read -r use_existing_config
+        if [ "$use_existing_config" = "y" ] || [ "$use_existing_config" = "Y" ]; then
+            echo_step "Сохранение существующей конфигурации..."
+            EXISTING_TOKEN=$(grep -o 'token = .*' "${INSTALL_DIR}/kdw.cfg" | cut -d' ' -f3)
+            EXISTING_USER_ID=$(grep -o 'access_ids = \[.*\]' "${INSTALL_DIR}/kdw.cfg" | sed 's/access_ids = \[\(.*\)\]/\1/')
+
+            if [ -n "$EXISTING_TOKEN" ] && [ -n "$EXISTING_USER_ID" ]; then
+                POSTINST_ARGS="--token $EXISTING_TOKEN --user-id $EXISTING_USER_ID"
+                echo_success "Конфигурация сохранена."
+            else
+                echo "Не удалось прочитать старый конфиг. Установка будет интерактивной."
+            fi
+        fi
+    fi
+
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
     if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
     rm -rf "$INSTALL_DIR"
@@ -55,7 +73,7 @@ fi
 
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка системных зависимостей ---
+# --- 1. Установка ключевых зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
 opkg install python3 python3-pip curl jq git git-http
@@ -89,7 +107,7 @@ if [ $? -ne 0 ]; then echo_error "Не удалось создать вирту�
 echo_success "Виртуальное окружение создано в $VENV_DIR"
 
 echo_step "Установка Python-библиотек в виртуальное окружение..."
-${VENV_DIR}/bin/pip install --upgrade -r ${INSTALL_DIR}/requirements.txt
+${VENV_DIR}/bin/pip install --upgrade -r ${INSTALL_DIR}/requirements.txt --break-system-packages
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 

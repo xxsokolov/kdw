@@ -35,27 +35,23 @@
 
 *   **Установка (интерактивно):**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh
+    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh
     ```
     Скрипт сам задаст все необходимые вопросы (токен бота, ваш ID).
 
 *   **Установка (автоматически):**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh -- --token YOUR_TOKEN --user-id YOUR_ID
+    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh -- --token YOUR_TOKEN --user-id YOUR_ID
     ```
 
 *   **Переустановка:**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh -- --reinstall
+    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && Sh /tmp/bootstrap.sh -- --reinstall
     ```
 
 *   **Удаление:**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh -- --uninstall
+    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh -- --uninstall
     ```
 
 ---

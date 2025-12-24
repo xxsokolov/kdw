@@ -75,8 +75,8 @@ echo_step "Запуск установки KDW Bot..."
 # --- 1. Установка ключевых зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-# Добавляем python3-venv для создания виртуальных окружений
-opkg install python3 python3-pip python3-venv curl jq git git-http
+# Используем python3-light, который включает venv
+opkg install python3-light python3-pip curl jq git git-http
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 

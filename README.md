@@ -26,7 +26,7 @@
 3.  **Установите `curl` и `jq`:** Выполните следующие команды, чтобы обновить списки пакетов и установить необходимые утилиты. Это **обязательный** шаг.
     ```sh
     opkg update
-    opkg install curl jq
+    opkg install curl
     ```
 
 ### Шаг 2: Установка / Управление KDW Bot
@@ -35,22 +35,19 @@
 
 *   **Установка (интерактивно):**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh
+    curl -H "Cache-Control: no-cache" -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh
     ```
     Скрипт сам задаст все необходимые вопросы (токен бота, ваш ID).
 
 *   **Переустановка:**
     Эта команда полностью удалит старую версию и запустит чистую установку. Если будет найден существующий файл конфигурации `kdw.cfg`, скрипт предложит использовать его для новой установки.
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh -- --reinstall
+    curl -H "Cache-Control: no-cache" -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh -- --reinstall
     ```
 
 *   **Удаление:**
     ```sh
-    curl -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    sh /tmp/bootstrap.sh -- --uninstall
+    curl -H "Cache-Control: no-cache" -sL -o /tmp/bootstrap.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh && sh /tmp/bootstrap.sh -- --uninstall
     ```
 
 ---

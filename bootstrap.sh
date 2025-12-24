@@ -5,11 +5,11 @@
 
 # --- Configuration ---
 INSTALL_DIR="/opt/etc/kdw"
-VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
-# Используем /opt/tmp, так как он находится на USB-накопителе с достаточным местом
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
 CPYTHON_SRC_DIR="/opt/tmp/cpython_src"
+OPKG_DEPENDENCIES="python3 python3-pip curl jq git git-http"
+REQUIREMENTS_FILE="${INSTALL_DIR}/requirements.txt"
 
 # --- Functions ---
 echo_step() {
@@ -20,7 +20,6 @@ echo_success() {
 }
 echo_error() {
   echo "[ERROR] $1"
-  # Очистка временных файлов перед выходом
   rm -rf "$TMP_REPO_DIR"
   rm -rf "$CPYTHON_SRC_DIR"
   exit 1
@@ -78,7 +77,7 @@ echo_step "Запуск установки KDW Bot..."
 # --- 1. Установка системных зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-opkg install python3 python3-pip curl jq git git-http
+opkg install $OPKG_DEPENDENCIES
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 
@@ -128,13 +127,18 @@ rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
 # --- 4. Создание и установка зависимостей в VENV ---
+VENV_DIR="${INSTALL_DIR}/venv"
 echo_step "Создание виртуального окружения Python..."
 python3 -m venv "$VENV_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
 echo_success "Виртуальное окружение создано в $VENV_DIR"
 
+echo_step "Обновление pip в виртуальном окружении..."
+${VENV_DIR}/bin/python -m pip install --upgrade pip
+if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
+
 echo_step "Установка Python-библиотек в виртуальное окружение..."
-${VENV_DIR}/bin/pip install --upgrade -r ${INSTALL_DIR}/requirements.txt --break-system-packages
+${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-packages
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 

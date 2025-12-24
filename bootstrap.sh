@@ -28,7 +28,7 @@ echo_error() {
 
 # --- Argument Parsing ---
 ACTION="install"
-RECREATE_VENV="true" # По умолчанию всегда пересоздаем venv
+RECREATE_VENV="true"
 POSTINST_ARGS=""
 while [ "$1" != "" ]; do
     case $1 in
@@ -43,9 +43,16 @@ done
 # --- Action: Uninstall ---
 if [ "$ACTION" = "uninstall" ]; then
     echo_step "Запуск удаления KDW Bot..."
+
+    # Останавливаем службу, если она существует
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
-    if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
-    rm -rf "$INSTALL_DIR"
+
+    echo "Удаление файлов и директорий..."
+    # Проверяем и удаляем каждый файл/директорию, логируя действие
+    [ -f /opt/etc/init.d/S99kdwbot ] && rm -f /opt/etc/init.d/S99kdwbot && echo "  - /opt/etc/init.d/S99kdwbot"
+    [ -f /opt/etc/init.d/S99unblock ] && rm -f /opt/etc/init.d/S99unblock && echo "  - /opt/etc/init.d/S99unblock"
+    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR" && echo "  - $INSTALL_DIR (директория проекта)"
+
     echo_success "KDW Bot полностью удален."
     exit 0
 fi
@@ -78,9 +85,7 @@ if [ "$ACTION" = "reinstall" ]; then
     fi
 
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
-    if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
 
-    # Надежный способ сохранить venv через tar
     VENV_BACKUP_FILE="/tmp/kdw_venv.tar.gz"
     if [ "$RECREATE_VENV" = "false" ] && [ -d "$VENV_DIR" ]; then
         echo_step "Создание резервной копии виртуального окружения..."

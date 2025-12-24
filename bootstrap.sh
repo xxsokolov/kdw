@@ -58,8 +58,6 @@ if [ "$ACTION" = "reinstall" ]; then
             if [ -n "$EXISTING_TOKEN" ] && [ -n "$EXISTING_USER_ID" ]; then
                 POSTINST_ARGS="--token $EXISTING_TOKEN --user-id $EXISTING_USER_ID"
                 echo_success "Конфигурация сохранена."
-            else
-                echo "Не удалось прочитать старый конфиг. Установка будет интерактивной."
             fi
         fi
     fi
@@ -72,16 +70,41 @@ fi
 
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка ключевых зависимостей ---
+# --- 1. Установка системных зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-# Используем python3-light, который включает venv
-opkg install python3-light python3-pip curl jq git git-http
+opkg install python3 python3-pip curl jq git git-http
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 
-# --- 2. Клонирование и выборочное копирование ---
-echo_step "Клонирование репозитория из GitHub..."
+# --- 2. Проверка и установка модуля VENV ---
+echo_step "Проверка модуля venv..."
+if ! python3 -m venv --help > /dev/null 2>&1; then
+    echo "  -> Модуль venv не найден. Попытка ручной установки..."
+
+    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
+    CPYTHON_SRC_DIR="/tmp/cpython_src"
+
+    if [ -z "$PY_LIB_PATH" ]; then echo_error "Не удалось определить путь к библиотекам Python."; fi
+
+    echo "  -> Клонирование исходного кода CPython v${PY_VER}..."
+    rm -rf "$CPYTHON_SRC_DIR"
+    git clone --depth=1 --branch="v${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
+    if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
+
+    echo "  -> Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
+    cp -r "${CPYTHON_SRC_DIR}/Lib/venv" "$PY_LIB_PATH/"
+    cp -r "${CPYTHON_SRC_DIR}/Lib/ensurepip" "$PY_LIB_PATH/"
+
+    rm -rf "$CPYTHON_SRC_DIR"
+    echo_success "Модуль venv успешно установлен."
+else
+    echo_success "Модуль venv уже доступен."
+fi
+
+# --- 3. Клонирование и выборочное копирование ---
+echo_step "Клонирование репозитория KDW Bot..."
 rm -rf "$TMP_REPO_DIR"
 git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
@@ -100,7 +123,7 @@ cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 3. Создание и установка зависимостей в VENV ---
+# --- 4. Создание и установка зависимостей в VENV ---
 echo_step "Создание виртуального окружения Python..."
 python3 -m venv "$VENV_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
@@ -111,7 +134,7 @@ ${VENV_DIR}/bin/pip install --upgrade -r ${INSTALL_DIR}/requirements.txt --break
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 
-# --- 4. Запуск скрипта настройки ---
+# --- 5. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."

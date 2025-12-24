@@ -52,40 +52,34 @@ echo_step "Запуск установки KDW Bot..."
 # --- 1. Установка ключевых зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-opkg install python3 python3-pip curl jq tar
+opkg install python3 python3-pip curl jq git
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 
-# --- 2. Скачивание и распаковка ---
+# --- 2. Клонирование и выборочное копирование ---
 INSTALL_DIR="/opt/etc/kdw"
-REPO_URL="https://github.com/xxsokolov/KDW/archive/refs/heads/main.tar.gz"
-TMP_FILE="/tmp/kdw_main.tar.gz"
+REPO_URL="https://github.com/xxsokolov/KDW.git"
+TMP_REPO_DIR="/tmp/kdw_repo"
 
-echo_step "Скачивание последней версии..."
-curl -sL "$REPO_URL" -o "$TMP_FILE"
-if [ $? -ne 0 ]; then echo_error "Не удалось скачать архив с GitHub."; fi
+echo_step "Клонирование репозитория из GitHub..."
+rm -rf "$TMP_REPO_DIR"
+git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
+if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
-echo_step "Распаковка и установка файлов в $INSTALL_DIR..."
+echo_step "Копирование рабочих файлов в $INSTALL_DIR..."
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 
-# Распаковываем архив во временную директорию
-EXTRACTED_DIR_NAME=$(tar -tzf "$TMP_FILE" | head -1 | cut -f1 -d"/")
-tar -xzf "$TMP_FILE" -C /tmp
-if [ $? -ne 0 ]; then echo_error "Не удалось распаковать архив."; fi
-
 # Копируем только необходимые для работы файлы и директории
-TMP_SOURCE_DIR="/tmp/${EXTRACTED_DIR_NAME}"
-cp -r ${TMP_SOURCE_DIR}/core "$INSTALL_DIR/"
-cp -r ${TMP_SOURCE_DIR}/scripts "$INSTALL_DIR/"
-cp -r ${TMP_SOURCE_DIR}/opkg "$INSTALL_DIR/"
-cp ${TMP_SOURCE_DIR}/kdw_bot.py "$INSTALL_DIR/"
-cp ${TMP_SOURCE_DIR}/kdw.cfg.example "$INSTALL_DIR/"
-cp ${TMP_SOURCE_DIR}/requirements.txt "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/core "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/scripts "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/opkg "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/kdw_bot.py "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/kdw.cfg.example "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 
 # Очистка
-rm "$TMP_FILE"
-rm -rf "$TMP_SOURCE_DIR"
+rm -rf "$TMP_REPO_DIR"
 
 echo_success "Файлы проекта успешно установлены."
 

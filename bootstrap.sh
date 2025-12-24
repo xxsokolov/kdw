@@ -56,7 +56,6 @@ opkg install python3 python3-pip curl jq tar
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 
-
 # --- 2. Скачивание и распаковка ---
 INSTALL_DIR="/opt/etc/kdw"
 REPO_URL="https://github.com/xxsokolov/KDW/archive/refs/heads/main.tar.gz"
@@ -70,17 +69,24 @@ echo_step "Распаковка и установка файлов в $INSTALL_D
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 
-tar -xzf "$TMP_FILE" -C "$INSTALL_DIR" --strip-components=1
-if [ $? -ne 0 ]; then
-    # Откат к совместимому с BusyBox методу, если --strip-components не сработал
-    echo "  -> Используется совместимый метод распаковки..."
-    EXTRACTED_DIR=\$(tar -tzf "\$TMP_FILE" | head -1 | cut -f1 -d"/")
-    tar -xzf "\$TMP_FILE" -C /tmp
-    mv /tmp/\${EXTRACTED_DIR}/* "\$INSTALL_DIR/"
-    rm -rf "/tmp/\$EXTRACTED_DIR"
-fi
+# Распаковываем архив во временную директорию
+EXTRACTED_DIR_NAME=$(tar -tzf "$TMP_FILE" | head -1 | cut -f1 -d"/")
+tar -xzf "$TMP_FILE" -C /tmp
+if [ $? -ne 0 ]; then echo_error "Не удалось распаковать архив."; fi
 
+# Копируем только необходимые для работы файлы и директории
+TMP_SOURCE_DIR="/tmp/${EXTRACTED_DIR_NAME}"
+cp -r ${TMP_SOURCE_DIR}/core "$INSTALL_DIR/"
+cp -r ${TMP_SOURCE_DIR}/scripts "$INSTALL_DIR/"
+cp -r ${TMP_SOURCE_DIR}/opkg "$INSTALL_DIR/"
+cp ${TMP_SOURCE_DIR}/kdw_bot.py "$INSTALL_DIR/"
+cp ${TMP_SOURCE_DIR}/kdw.cfg.example "$INSTALL_DIR/"
+cp ${TMP_SOURCE_DIR}/requirements.txt "$INSTALL_DIR/"
+
+# Очистка
 rm "$TMP_FILE"
+rm -rf "$TMP_SOURCE_DIR"
+
 echo_success "Файлы проекта успешно установлены."
 
 # --- 3. Установка Python зависимостей ---
@@ -88,7 +94,6 @@ echo_step "Установка Python-библиотек..."
 pip3 install -r ${INSTALL_DIR}/requirements.txt
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
-
 
 # --- 4. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"

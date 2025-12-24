@@ -5,6 +5,7 @@
 
 # --- Configuration ---
 INSTALL_DIR="/opt/etc/kdw"
+VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
 CPYTHON_SRC_DIR="/opt/tmp/cpython_src"
@@ -54,9 +55,9 @@ if [ "$ACTION" = "reinstall" ]; then
     echo_step "Запуск переустановки KDW Bot..."
 
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
-        printf "Найден существующий файл конфигурации. Использовать его? (y/n): "
+        printf "Найден существующий файл конфигурации. Использовать его? (Y/n): "
         read -r use_existing_config
-        if [ "$use_existing_config" = "y" ] || [ "$use_existing_config" = "Y" ]; then
+        if [ "$use_existing_config" != "n" ] && [ "$use_existing_config" != "N" ]; then
             echo_step "Сохранение существующей конфигурации..."
             EXISTING_TOKEN=$(grep -o 'token = .*' "${INSTALL_DIR}/kdw.cfg" | cut -d' ' -f3)
             EXISTING_USER_ID=$(grep -o 'access_ids = \[.*\]' "${INSTALL_DIR}/kdw.cfg" | sed 's/access_ids = \[\(.*\)\]/\1/')
@@ -68,10 +69,12 @@ if [ "$ACTION" = "reinstall" ]; then
         fi
     fi
 
-    if [ -d "${INSTALL_DIR}/venv" ]; then
-        printf "Найдено существующее виртуальное окружение. Пересоздать его? (y/n): "
-        read -r recreate_venv_choice
-        if [ "$recreate_venv_choice" = "n" ] || [ "$recreate_venv_choice" = "N" ]; then
+    if [ -d "$VENV_DIR" ]; then
+        printf "Сохранить существующее виртуальное окружение? (Y/n): "
+        read -r save_venv_choice
+        if [ "$save_venv_choice" = "n" ] || [ "$save_venv_choice" = "N" ]; then
+            RECREATE_VENV="true"
+        else
             RECREATE_VENV="false"
         fi
     fi
@@ -79,7 +82,7 @@ if [ "$ACTION" = "reinstall" ]; then
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
 
     VENV_BACKUP_FILE="/tmp/kdw_venv.tar.gz"
-    if [ "$RECREATE_VENV" = "false" ] && [ -d "${INSTALL_DIR}/venv" ]; then
+    if [ "$RECREATE_VENV" = "false" ] && [ -d "$VENV_DIR" ]; then
         echo_step "Создание резервной копии виртуального окружения..."
         tar -czf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR" venv
         if [ $? -ne 0 ]; then echo_error "Не удалось создать архив venv."; fi
@@ -140,28 +143,17 @@ git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
 echo_step "Копирование рабочих файлов в $INSTALL_DIR..."
-TMP_SOURCE_DIR="$TMP_REPO_DIR"
-
-# Явно создаем директории и копируем в них содержимое, чтобы избежать проблем с BusyBox cp
-mkdir -p "${INSTALL_DIR}/core"
-cp -r ${TMP_SOURCE_DIR}/core/* "${INSTALL_DIR}/core/"
-
-mkdir -p "${INSTALL_DIR}/scripts"
-cp -r ${TMP_SOURCE_DIR}/scripts/* "${INSTALL_DIR}/scripts/"
-
-mkdir -p "${INSTALL_DIR}/opkg"
-cp -r ${TMP_SOURCE_DIR}/opkg/* "${INSTALL_DIR}/opkg/"
-
-# Копируем остальные файлы
-cp ${TMP_SOURCE_DIR}/kdw_bot.py "$INSTALL_DIR/"
-cp ${TMP_SOURCE_DIR}/kdw.cfg.example "$INSTALL_DIR/"
-cp ${TMP_SOURCE_DIR}/requirements.txt "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/core "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/scripts "$INSTALL_DIR/"
+cp -r ${TMP_REPO_DIR}/opkg "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/kdw_bot.py "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/kdw.cfg.example "$INSTALL_DIR/"
+cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
 # --- 4. Создание и установка зависимостей в VENV ---
-VENV_DIR="${INSTALL_DIR}/venv"
 if [ "$RECREATE_VENV" = "true" ]; then
     echo_step "Создание виртуального окружения Python..."
     python3 -m venv "$VENV_DIR"

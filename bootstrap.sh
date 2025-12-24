@@ -4,11 +4,8 @@
 # https://github.com/xxsokolov/KDW
 
 # --- Configuration ---
-# Директория, куда будет установлен бот
 INSTALL_DIR="/opt/etc/kdw"
-# URL Git-репозитория
 REPO_URL="https://github.com/xxsokolov/KDW.git"
-# Временная директория для клонирования
 TMP_REPO_DIR="/tmp/kdw_repo"
 
 # --- Functions ---
@@ -85,8 +82,9 @@ rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
 # --- 3. Установка Python зависимостей ---
-echo_step "Установка Python-библиотек..."
-pip3 install -r ${INSTALL_DIR}/requirements.txt
+echo_step "Установка и обновление Python-библиотек..."
+# Используем --upgrade для приведения библиотек в соответствие с requirements.txt
+pip3 install --upgrade -r ${INSTALL_DIR}/requirements.txt --break-system-packages
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 

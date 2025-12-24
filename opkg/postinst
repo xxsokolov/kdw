@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (SAFE VERSION 6)
+# KDW Bot Post-Installation Script (FINAL SAFE VERSION)
 
 # --- Functions ---
 echo_step() {
@@ -108,30 +108,36 @@ PYTHON_EXEC="$PYTHON_EXEC"
 PID_FILE="/var/run/kdw_bot.pid"
 LOG_FILE="${LOG_DIR}/kdw_bot.log"
 
+log_message() {
+    # Форматируем сообщение, как в Python-логгере
+    echo "\$(date '+%Y-%m-%d %H:%M:%S,%3N') - \$1 - \$2" >> \$LOG_FILE
+}
+
 start() {
     if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then
-        echo "KDW Bot is already running."
+        log_message "INFO" "KDW Bot is already running."
         return
     fi
-    echo "Starting KDW Bot..."
+    log_message "INFO" "Starting KDW Bot..."
+    # Запускаем бот в фоне и сохраняем его PID
     \$PYTHON_EXEC \$BOT_PATH >> \$LOG_FILE 2>&1 &
     echo \$! > \$PID_FILE
 }
 
 stop() {
     if [ ! -f "\$PID_FILE" ]; then
-        echo "KDW Bot is not running (PID file not found)."
+        log_message "INFO" "KDW Bot is not running (PID file not found)."
         return
     fi
 
     PID=\$(cat \$PID_FILE)
     if ! ps | grep -q "^\s*\$PID\s"; then
-        echo "KDW Bot is not running (stale PID file found)."
+        log_message "WARNING" "KDW Bot is not running (stale PID file found)."
         rm -f \$PID_FILE
         return
     fi
 
-    echo "Stopping KDW Bot (PID: \$PID)..."
+    log_message "INFO" "Stopping KDW Bot (PID: \$PID)..."
     kill \$PID
     rm -f \$PID_FILE
 }
@@ -154,13 +160,21 @@ echo_success "Служба создана."
 # --- 6. Final ---
 echo_step "Запуск бота..."
 $SERVICE_FILE start
+sleep 5 # Даем боту время на запуск
 
-echo ""
-echo_success "Установка и настройка завершены!"
-echo ""
-echo "--- Что дальше? ---"
-echo "1. Откройте Telegram и найдите вашего бота: @${BOT_USERNAME}"
-echo "2. Отправьте ему команду /start, чтобы появилось главное меню."
-echo ""
+# --- 7. Проверка успешного запуска ---
+echo_step "Проверка статуса запущенного бота..."
+if [ -f /var/run/kdw_bot.pid ] && ps | grep -q "^\s*$(cat /var/run/kdw_bot.pid)\s"; then
+    echo_success "Процесс бота успешно запущен."
+    echo ""
+    echo "--- Что дальше? ---"
+    echo "1. Откройте Telegram и найдите вашего бота: @${BOT_USERNAME}"
+    echo "2. Отправьте ему команду /start, чтобы появилось главное меню."
+    echo ""
+else
+    echo_error "Не удалось запустить процесс бота. Пожалуйста, проверьте лог-файл:"
+    echo "   less /opt/var/log/kdw_bot.log"
+    exit 1
+fi
 
 exit 0

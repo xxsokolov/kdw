@@ -8,7 +8,7 @@ INSTALL_DIR="/opt/etc/kdw"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
 CPYTHON_SRC_DIR="/opt/tmp/cpython_src"
-OPKG_DEPENDENCIES="python3 python3-pip curl jq git git-http"
+OPKG_DEPENDENCIES="python3 python3-pip jq git git-http"
 REQUIREMENTS_FILE="${INSTALL_DIR}/requirements.txt"
 
 # --- Functions ---
@@ -74,7 +74,7 @@ fi
 
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка системных зависимостей ---
+# --- 1. Установка ключевых зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
 opkg install $OPKG_DEPENDENCIES

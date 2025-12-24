@@ -80,13 +80,23 @@ if [ "$ACTION" = "reinstall" ]; then
     if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then sh "${INSTALL_DIR}/opkg/prerm"; fi
     if [ -f "${INSTALL_DIR}/opkg/postrm" ]; then sh "${INSTALL_DIR}/opkg/postrm"; fi
 
-    # Удаляем все, КРОМЕ venv, если пользователь решил его оставить
-    if [ "$RECREATE_VENV" = "false" ]; then
-        echo_step "Сохранение виртуального окружения..."
-        find "$INSTALL_DIR" -mindepth 1 ! -name 'venv' -exec rm -rf {} +
-    else
-        rm -rf "$INSTALL_DIR"
+    # Надежный способ сохранить venv через tar
+    VENV_BACKUP_FILE="/tmp/kdw_venv.tar.gz"
+    if [ "$RECREATE_VENV" = "false" ] && [ -d "$VENV_DIR" ]; then
+        echo_step "Создание резервной копии виртуального окружения..."
+        tar -czf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR" venv
+        if [ $? -ne 0 ]; then echo_error "Не удалось создать архив venv."; fi
     fi
+
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+
+    if [ -f "$VENV_BACKUP_FILE" ]; then
+        echo_step "Восстановление виртуального окружения из резервной копии..."
+        tar -xzf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR"
+        rm "$VENV_BACKUP_FILE"
+    fi
+
     echo_success "Старая версия удалена."
 fi
 
@@ -133,9 +143,6 @@ git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
 echo_step "Копирование рабочих файлов в $INSTALL_DIR..."
-# Создаем директорию, если она не существует (важно при первой установке)
-mkdir -p "$INSTALL_DIR"
-
 cp -r ${TMP_REPO_DIR}/core "$INSTALL_DIR/"
 cp -r ${TMP_REPO_DIR}/scripts "$INSTALL_DIR/"
 cp -r ${TMP_REPO_DIR}/opkg "$INSTALL_DIR/"
@@ -162,7 +169,7 @@ if [ "$RECREATE_VENV" = "true" ]; then
     if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
     echo_success "Python-библиотеки установлены."
 else
-    echo_step "Пропуск создания виртуального окружения."
+    echo_step "Пропуск создания/обновления виртуального окружения."
 fi
 
 # --- 5. Запуск скрипта настройки ---
@@ -173,7 +180,6 @@ fi
 
 echo_step "Запуск основного скрипта настройки..."
 chmod +x "$POSTINST_SCRIPT"
-# Передаем путь к Python из venv в postinst
 sh "$POSTINST_SCRIPT" $POSTINST_ARGS --python-exec "${VENV_DIR}/bin/python"
 
 exit 0

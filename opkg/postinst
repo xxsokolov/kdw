@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Post-Installation Script (FINAL, logmsg-aware)
+# KDW Bot Post-Installation Script (FINAL, venv-aware)
 
 # --- Functions ---
 echo_step() {
@@ -17,17 +17,13 @@ echo_error() {
 # --- 1. Argument Parsing ---
 BOT_TOKEN=""
 USER_ID=""
+PYTHON_EXEC=""
 
 while [ "$1" != "" ]; do
     case $1 in
-        --token)
-            shift
-            BOT_TOKEN=$1
-            ;;
-        --user-id)
-            shift
-            USER_ID=$1
-            ;;
+        --token) shift; BOT_TOKEN=$1 ;;
+        --user-id) shift; USER_ID=$1 ;;
+        --python-exec) shift; PYTHON_EXEC=$1 ;;
     esac
     shift
 done
@@ -47,10 +43,15 @@ else
   echo "Используются параметры, переданные при запуске."
 fi
 
-# --- 3. Validate Token & Dependencies ---
+# --- 3. Validate Dependencies & Token ---
 echo_step "Проверка токена и зависимостей..."
-if ! command -v python3 > /dev/null; then echo_error "Python3 не найден. Убедитесь, что пакет 'python3' установлен."; fi
-PYTHON_EXEC=$(command -v python3)
+if [ -z "$PYTHON_EXEC" ]; then
+    # Если путь не передан, пытаемся найти его сами
+    if ! command -v python3 > /dev/null; then echo_error "Python3 не найден."; fi
+    PYTHON_EXEC=$(command -v python3)
+fi
+if ! command -v curl > /dev/null; then echo_error "curl не найден."; fi
+if ! command -v jq > /dev/null; then echo_error "jq не найден."; fi
 
 API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
 RESPONSE=$(curl -s "$API_URL")
@@ -100,9 +101,9 @@ fi
 
 cat > $SERVICE_FILE << EOF
 #!/bin/sh
-# KDW Bot Service (logmsg-aware)
+# KDW Bot Service (VENV-aware)
 BOT_PATH="${PROJECT_DIR}/kdw_bot.py"
-PYTHON_EXEC="$PYTHON_EXEC"
+PYTHON_EXEC="$PYTHON_EXEC" # <--- ПУТЬ ПЕРЕДАЕТСЯ ИЗ BOOTSTRAP.SH
 PID_FILE="/var/run/kdw_bot.pid"
 
 start() {
@@ -111,7 +112,6 @@ start() {
         return
     fi
     echo "Starting KDW Bot..."
-    # Запускаем бот в фоне, он сам будет писать в системный журнал
     \$PYTHON_EXEC \$BOT_PATH &
     echo \$! > \$PID_FILE
 }
@@ -152,7 +152,7 @@ echo_success "Служба создана."
 # --- 6. Final ---
 echo_step "Запуск бота..."
 $SERVICE_FILE start
-sleep 2 # Небольшая пауза для стабилизации
+sleep 5
 
 # --- 7. Проверка успешного запуска ---
 echo_step "Проверка статуса запущенного бота..."
@@ -162,7 +162,6 @@ if [ -f /var/run/kdw_bot.pid ] && ps | grep -q "^\s*$(cat /var/run/kdw_bot.pid)\
     echo "--- Что дальше? ---"
     echo "1. Откройте Telegram и найдите вашего бота: @${BOT_USERNAME}"
     echo "2. Отправьте ему команду /start, чтобы появилось главное меню."
-    echo "3. Следите за логами в системном журнале Keenetic."
     echo ""
 else
     echo_error "Не удалось запустить процесс бота. Проверьте системный журнал Keenetic для получения подробной информации."

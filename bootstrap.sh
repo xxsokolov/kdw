@@ -5,6 +5,7 @@
 
 # --- Configuration ---
 INSTALL_DIR="/opt/etc/kdw"
+VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
 CPYTHON_SRC_DIR="/opt/tmp/cpython_src"
@@ -74,7 +75,7 @@ fi
 
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка ключевых зависимостей ---
+# --- 1. Установка системных зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
 opkg install $OPKG_DEPENDENCIES
@@ -126,13 +127,7 @@ cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 4. Установка прав на выполнение ---
-echo_step "Установка прав на выполнение для скриптов..."
-chmod +x ${INSTALL_DIR}/scripts/*.sh
-chmod +x ${INSTALL_DIR}/opkg/postinst
-echo_success "Права на выполнение установлены."
-
-# --- 5. Установка Python зависимостей ---
+# --- 4. Создание и установка зависимостей в VENV ---
 VENV_DIR="${INSTALL_DIR}/venv"
 echo_step "Создание виртуального окружения Python..."
 python3 -m venv "$VENV_DIR"
@@ -148,13 +143,15 @@ ${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-pac
 if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
 echo_success "Python-библиотеки установлены."
 
-# --- 6. Запуск скрипта настройки ---
+# --- 5. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."
 fi
 
 echo_step "Запуск основного скрипта настройки..."
-sh "$POSTINST_SCRIPT" $POSTINST_ARGS
+chmod +x "$POSTINST_SCRIPT"
+# Передаем путь к Python из venv в postinst
+sh "$POSTINST_SCRIPT" $POSTINST_ARGS --python-exec "${VENV_DIR}/bin/python"
 
 exit 0

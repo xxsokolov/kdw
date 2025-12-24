@@ -47,7 +47,6 @@ fi
 # --- Action: Install / Reinstall ---
 if [ "$ACTION" = "reinstall" ]; then
     echo_step "Запуск переустановки KDW Bot..."
-
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
         printf "Найден существующий файл конфигурации. Использовать его для новой установки? (y/n): "
         read -r use_existing_config
@@ -76,7 +75,8 @@ echo_step "Запуск установки KDW Bot..."
 # --- 1. Установка ключевых зависимостей ---
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-opkg install python3 python3-pip curl jq git git-http
+# Добавляем python3-venv для создания виртуальных окружений
+opkg install python3 python3-pip python3-venv curl jq git git-http
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
 echo_success "Системные зависимости установлены."
 

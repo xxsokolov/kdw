@@ -88,7 +88,9 @@ if [ "$ACTION" = "reinstall" ]; then
         if [ $? -ne 0 ]; then echo_error "Не удалось создать архив venv."; fi
     fi
 
+    echo_step "Удаляеме старую версию KDW Bot..."
     rm -rf "$INSTALL_DIR"
+    echo_step "Создаем новую рабочую директорию..."
     mkdir -p "$INSTALL_DIR"
 
     if [ -f "$VENV_BACKUP_FILE" ]; then

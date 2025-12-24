@@ -18,14 +18,14 @@ from telegram.ext import (
     filters,
 )
 
+
+from core.log_utils import log as logger
 from core.installer import Installer
-from core.log_utils import Log
 from core.service_manager import ServiceManager
 from core.list_manager import ListManager
 from core.key_manager import KeyManager
 
 # --- Глобальные переменные и константы ---
-# Определяем путь к конфиг-файлу относительно расположения самого скрипта
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 
@@ -54,10 +54,10 @@ if os.path.isfile(default_config_file):
     config = ConfigParser()
     config.read(default_config_file, encoding='utf-8')
 else:
-    print(f"Error: Config file ({default_config_file}) not found!")
+    # Используем логгер, чтобы ошибка попала в системный журнал
+    logger.error(f"Error: Config file ({default_config_file}) not found!")
     sys.exit(1)
 
-logger = Log(debug=False).log
 installer = Installer(default_config_file)
 service_manager = ServiceManager()
 list_manager = ListManager()

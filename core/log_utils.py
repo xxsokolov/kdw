@@ -1,50 +1,54 @@
-import os
 import logging
-from logging import Logger
+import os
+from logging.handlers import SysLogHandler
 
-class KeeneticLogger(Logger):
-    """
-    Кастомный логгер, который пишет в системный журнал Keenetic через утилиту logmsg.
-    """
-    def __init__(self, name, level=logging.NOTSET):
-        super().__init__(name, level)
 
-    def _log(self, level, msg, args, exc_info=None, extra=None, stack_info=False, stacklevel=1):
-        # Преобразуем уровень logging в уровень logmsg
-        if level >= logging.ERROR:
-            log_level = 'err'
-        elif level >= logging.WARNING:
-            log_level = 'warn'
-        else:
-            log_level = 'info'
-        
-        # Форматируем сообщение
-        if args:
-            msg = msg % args
-        
-        # Очищаем сообщение от кавычек, чтобы не сломать shell-команду
-        safe_msg = msg.replace('"', "'").replace('`', "'")
-        
-        # Формируем и выполняем команду
-        command = f'logmsg {log_level} "KDW-Bot: {safe_msg}"'
+def get_logger(name='KDW-Bot', debug=False):
+    """
+    Настраивает логгер для KeeneticOS.
+    Приоритет: 1. Локальный сокет /dev/log 2. Сетевой UDP 514 3. Консоль (Stream)
+    """
+    logger = logging.getLogger(name)
+
+    # Установка уровня логирования
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+
+    # Очистка старых обработчиков (предотвращает дублирование логов)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    handler = None
+    log_format = '%(name)s: %(message)s'  # Стандарт для Syslog (время добавит система)
+
+    # 1. Пробуем подключиться к системному сокету (самый быстрый способ)
+    if os.path.exists('/dev/log'):
         try:
-            os.system(command)
+            handler = SysLogHandler(address='/dev/log', facility=SysLogHandler.LOG_USER)
         except Exception:
-            # Если что-то пошло не так, просто печатаем в консоль
-            print(f"KDW-Bot ({log_level}): {msg}")
+            handler = None
 
-class Log:
-    def __init__(self, debug=False):
-        # Заменяем стандартный класс логгера на наш кастомный
-        logging.setLoggerClass(KeeneticLogger)
-        
-        self.log = logging.getLogger(__name__)
-        
-        if debug:
-            self.log.setLevel(logging.DEBUG)
-        else:
-            self.log.setLevel(logging.INFO)
+    # 2. Если сокет недоступен, пробуем локальный UDP порт (стандарт syslog)
+    if handler is None:
+        try:
+            handler = SysLogHandler(address=('127.0.0.1', 514), facility=SysLogHandler.LOG_USER)
+        except Exception:
+            handler = None
 
-        # Убираем все стандартные обработчики, так как мы пишем напрямую через os.system
-        for handler in self.log.handlers[:]:
-            self.log.removeHandler(handler)
+    # 3. Если syslog полностью недоступен, пишем в стандартный вывод (stdout)
+    if handler is None:
+        handler = logging.StreamHandler()
+        # Для консоли добавляем время и уровень, так как там нет системного префикса
+        log_format = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+        logger.warning("Системный журнал (syslog) недоступен. Переход на StreamHandler.")
+
+    # Настройка форматирования и добавление обработчика
+    formatter = logging.Formatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    return logger
+
+
+# Создаем экземпляр для использования в проекте
+# В основном файле можно будет сделать: from logger import log
+log = get_logger()

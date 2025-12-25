@@ -188,7 +188,7 @@ if [ "$ACTION" = "install" ]; then
 
     # --- 4.1. Установка системных зависимостей ---
     run_with_spinner "Обновление списка пакетов opkg..." opkg update
-    run_with_spinner "Установка системных зависимостей..." opkg install --force-maintainer $OPKG_DEPENDENCIES
+    run_with_spinner "Установка системных зависимостей..." opkg install --force-maintainer --force-reinstall $OPKG_DEPENDENCIES
 
     # --- 4.2. Создание директории и манифеста ---
     mkdir -p "$INSTALL_DIR"

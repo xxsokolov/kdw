@@ -1,64 +1,69 @@
-from .shell_utils import run_command
-
-# Имена init-скриптов для служб
-SERVICE_NAMES = {
-    "shadowsocks": "S22shadowsocks",
-    "trojan": "S22trojan",
-    "vmess": "S24v2ray", # v2ray обслуживает vmess
-    "tor": "S35tor",
-}
-
-# Стандартный путь к init-скриптам в Entware
-INIT_D_PATH = "/opt/etc/init.d" # <--- ИСПРАВЛЕН ПУТЬ
+import asyncio
+import glob
+import os
 
 class ServiceManager:
     """
-    Управляет службами (прокси-клиентами) на роутере.
+    Управляет службами в /opt/etc/init.d, такими как Shadowsocks, Tor и т.д.
     """
+    def __init__(self):
+        self.init_dir = "/opt/etc/init.d"
+        # Сопоставление имени службы с шаблоном файла в init.d
+        self.service_map = {
+            "Shadowsocks": "S*shadowsocks*",
+            "Trojan": "S*trojan*",
+            "Vmess": "S*vmess*",
+            "Tor": "S*tor*",
+        }
+
+    def _find_script(self, pattern: str) -> str | None:
+        """
+        Находит первый скрипт в init.d, соответствующий шаблону.
+        """
+        if not os.path.isdir(self.init_dir):
+            return None
+        
+        scripts = glob.glob(os.path.join(self.init_dir, pattern))
+        return scripts[0] if scripts else None
+
+    async def _get_service_status(self, service_name: str) -> str:
+        """
+        Получает статус одной службы: активна, неактивна, не найдена.
+        """
+        pattern = self.service_map.get(service_name)
+        if not pattern:
+            return "не поддерживается"
+
+        script_path = self._find_script(pattern)
+        if not script_path:
+            return "❓ не найден"
+
+        # Пытаемся найти процесс, связанный со скриптом.
+        # Это более надежно, чем проверять PID-файл.
+        # Ищем процесс по имени, которое обычно совпадает с названием скрипта без префикса S##.
+        proc_name = os.path.basename(script_path)[3:] # Убираем 'S##'
+        
+        proc = await asyncio.create_subprocess_shell(
+            f"pgrep -f {proc_name}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+
+        if proc.returncode == 0 and stdout:
+            return "✅ активен"
+        else:
+            return "❌ неактивен"
 
     async def get_all_statuses(self) -> str:
         """
-        Проверяет статус всех известных служб и возвращает отформатированную строку.
+        Собирает статусы всех известных служб в один отчет.
         """
-        status_report = []
-        for name, script in SERVICE_NAMES.items():
-            command = f"{INIT_D_PATH}/{script} status"
-            return_code, stdout, stderr = await run_command(command)
-
-            status_icon = "❓" # Неизвестно
-            status_text = "не найден"
-
-            if return_code == 0:
-                if "running" in stdout.lower():
-                    status_icon = "✅"
-                    status_text = "Запущен"
-                elif "stopped" in stdout.lower() or "not running" in stdout.lower():
-                    status_icon = "❌"
-                    status_text = "Остановлен"
-                else:
-                    status_icon = "🤔"
-                    status_text = "Неясный статус"
+        tasks = [self._get_service_status(name) for name in self.service_map.keys()]
+        statuses = await asyncio.gather(*tasks)
+        
+        report = []
+        for name, status in zip(self.service_map.keys(), statuses):
+            report.append(f"{name}: {status}")
             
-            status_report.append(f"{status_icon} {name.capitalize()}: {status_text}")
-
-        if not status_report:
-            return "Не найдено ни одной службы для проверки."
-            
-        return "\n".join(status_report)
-
-    async def restart_service(self, service_name: str) -> tuple[bool, str]:
-        """
-        Перезапускает указанную службу.
-        Возвращает (True, "Успех") или (False, "Текст ошибки").
-        """
-        script_name = SERVICE_NAMES.get(service_name.lower())
-        if not script_name:
-            return False, f"Служба '{service_name}' не найдена."
-
-        command = f"{INIT_D_PATH}/{script_name} restart"
-        return_code, stdout, stderr = await run_command(command)
-
-        if return_code == 0:
-            return True, f"Служба '{service_name}' успешно перезапущена."
-        else:
-            return False, f"Ошибка перезапуска службы '{service_name}':\n{stdout}\n{stderr}"
+        return "\n".join(report)

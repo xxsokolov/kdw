@@ -49,7 +49,11 @@ if [ "$ACTION" = "uninstall" ]; then
     echo_step "Остановка служб..."
     sh /opt/etc/init.d/S99kdwbot stop
 
+    # Сначала читаем список пакетов в переменную, пока манифест не удален
+    PACKAGES_TO_REMOVE=$(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2- | tr '\n' ' ')
+
     echo_step "Удаление файлов и директорий из манифеста..."
+    # Используем awk для обратного чтения файла (аналог tac)
     awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$MANIFEST_FILE" | while read -r line; do
         type=$(echo "$line" | cut -d':' -f1)
         path=$(echo "$line" | cut -d':' -f2-)
@@ -63,7 +67,9 @@ if [ "$ACTION" = "uninstall" ]; then
     echo_success "Файлы и директории удалены."
 
     echo_step "Удаление системных пакетов из манифеста..."
-    opkg remove --force-depends $(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2- | tr '\n' ' ')
+    if [ -n "$PACKAGES_TO_REMOVE" ]; then
+        opkg remove --force-depends $PACKAGES_TO_REMOVE
+    fi
     rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
     echo_success "Системные пакеты удалены."
 

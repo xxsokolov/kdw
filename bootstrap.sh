@@ -9,7 +9,6 @@
 #
 # Автор: xxsokolov
 # GitHub: https://github.com/xxsokolov/KDW
-# Версия: 1.0.0
 # =================================================================
 
 # --- 1. Конфигурация ---
@@ -25,6 +24,49 @@ echo_step() { printf "-> %s\n" "$1"; }
 echo_success() { printf "\033[0;32m[OK] %s\033[0m\n" "$1"; }
 echo_error() { printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"; exit 1; }
 add_to_manifest() { echo "$1" >> "$MANIFEST_FILE"; }
+
+# Функция для отображения спиннера во время выполнения команды
+run_with_spinner() {
+    local text="$1"
+    shift
+    local cmd="$@"
+
+    spinner() {
+        local chars="/-\|"
+        while :; do
+            for i in $(seq 0 3); do
+                printf "\r\033[0;36m[%c]\033[0m %s..." "${chars:$i:1}" "$text"
+                sleep 0.1
+            done
+        done
+    }
+
+    spinner &
+    SPINNER_PID=$!
+    # Останавливаем спиннер при выходе из скрипта
+    trap 'kill $SPINNER_PID 2>/dev/null' EXIT
+
+    # Выполняем команду, скрывая ее вывод
+    OUTPUT=$($cmd 2>&1)
+    EXIT_CODE=$?
+
+    # Останавливаем спиннер
+    kill $SPINNER_PID 2>/dev/null
+    trap - EXIT
+
+    # Очищаем строку
+    printf "\r%80s\r" " "
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo_error "$text"
+        echo "--- Подробности ошибки ---"
+        echo "$OUTPUT"
+        echo "--------------------------"
+        exit 1
+    else
+        echo_success "$text"
+    fi
+}
 
 show_help() {
     echo "KDW Bot Installer & Manager"
@@ -101,12 +143,8 @@ if [ "$ACTION" = "uninstall" ]; then
     done
     echo_success "Файлы и директории удалены."
 
-    echo_step "Удаление системных пакетов из манифеста..."
-    if [ -n "$PACKAGES_TO_REMOVE" ]; then
-        opkg remove --force-depends $PACKAGES_TO_REMOVE
-    fi
+    run_with_spinner "Удаление системных пакетов..." opkg remove --force-depends $PACKAGES_TO_REMOVE
     rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
-    echo_success "Системные пакеты удалены."
 
     echo_success "KDW Bot полностью удален."
     exit 0
@@ -125,9 +163,7 @@ if [ "$ACTION" = "update" ]; then
         echo_success "Конфигурация сохранена."
     fi
 
-    echo_step "Скачивание последней версии установщика..."
-    curl -sL -o /tmp/bootstrap_new.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
-    if [ $? -ne 0 ]; then echo_error "Не удалось скачать новый установщик."; fi
+    run_with_spinner "Скачивание последней версии установщика..." curl -sL -o /tmp/bootstrap_new.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
 
     echo_step "Удаление старой версии..."
     sh $0 --uninstall
@@ -153,11 +189,8 @@ if [ "$ACTION" = "install" ]; then
     fi
 
     # --- 4.1. Установка системных зависимостей ---
-    echo_step "Установка системных зависимостей..."
-    opkg update > /dev/null
-    opkg install --force-maintainer $OPKG_DEPENDENCIES
-    if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты."; fi
-    echo_success "Системные зависимости установлены."
+    run_with_spinner "Обновление списка пакетов opkg..." opkg update
+    run_with_spinner "Установка системных зависимостей..." opkg install --force-maintainer $OPKG_DEPENDENCIES
 
     # --- 4.2. Создание директории и манифеста ---
     mkdir -p "$INSTALL_DIR"
@@ -183,10 +216,7 @@ if [ "$ACTION" = "install" ]; then
     echo_success "Dnsmasq настроен."
 
     # --- 4.4. Клонирование репозитория ---
-    echo_step "Клонирование репозитория KDW Bot..."
-    rm -rf "$TMP_REPO_DIR"
-    git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
-    if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
+    run_with_spinner "Клонирование репозитория KDW Bot..." git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 
     # --- 4.5. Копирование файлов проекта ---
     echo_step "Копирование рабочих файлов..."
@@ -213,20 +243,12 @@ if [ "$ACTION" = "install" ]; then
     for pkg in $OPKG_DEPENDENCIES; do add_to_manifest "pkg:$pkg"; done
     echo_success "Манифест пакетов создан."
 
-    echo_step "Создание виртуального окружения Python..."
-    python3 -m venv "$VENV_DIR"
-    if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
+    run_with_spinner "Создание виртуального окружения Python..." python3 -m venv "$VENV_DIR"
     add_to_manifest "dir:$VENV_DIR"
-    echo_success "Виртуальное окружение создано."
 
-    echo_step "Обновление pip..."
-    ${VENV_DIR}/bin/python -m pip install --upgrade pip
-    if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
+    run_with_spinner "Обновление pip..." ${VENV_DIR}/bin/python -m pip install --upgrade pip
 
-    echo_step "Установка Python-библиотек..."
-    ${VENV_DIR}/bin/pip install --upgrade -r "${INSTALL_DIR}/requirements.txt"
-    if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
-    echo_success "Python-библиотеки установлены."
+    run_with_spinner "Установка Python-библиотек..." ${VENV_DIR}/bin/pip install --upgrade -r "${INSTALL_DIR}/requirements.txt"
 
     # --- 4.7. Финальная настройка и запуск ---
     echo_step "Финальная настройка..."

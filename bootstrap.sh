@@ -115,7 +115,7 @@ if [ "$ACTION" = "uninstall" ]; then
         echo "Манифест установки не найден. Попытка стандартного удаления..."
         [ -f /opt/etc/init.d/S99kdwbot ] && sh /opt/etc/init.d/S99kdwbot stop
         rm -rf "$INSTALL_DIR" /opt/etc/init.d/S99kdwbot /opt/etc/init.d/S99unblock
-        opkg remove --force-depends $OPKG_DEPENDENCIES
+        opkg remove $OPKG_DEPENDENCIES --force-remove --force-depends
         rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
         echo_success "Стандартное удаление завершено."
         exit 0
@@ -140,7 +140,7 @@ if [ "$ACTION" = "uninstall" ]; then
     echo_success "Файлы и директории удалены."
 
     if [ -n "$PACKAGES_TO_REMOVE" ]; then
-        run_with_spinner "Удаление системных пакетов..." opkg remove --force-depends $PACKAGES_TO_REMOVE
+        run_with_spinner "Удаление системных пакетов..." opkg remove $PACKAGES_TO_REMOVE --force-remove --force-depends
     fi
     rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
 
@@ -188,7 +188,7 @@ if [ "$ACTION" = "install" ]; then
 
     # --- 4.1. Установка системных зависимостей ---
     run_with_spinner "Обновление списка пакетов opkg..." opkg update
-    run_with_spinner "Установка системных зависимостей..." opkg install --force-maintainer --force-reinstall $OPKG_DEPENDENCIES
+    run_with_spinner "Установка системных зависимостей..." opkg install $OPKG_DEPENDENCIES
 
     # --- 4.2. Создание директории и манифеста ---
     mkdir -p "$INSTALL_DIR"

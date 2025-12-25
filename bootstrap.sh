@@ -36,7 +36,7 @@ run_with_spinner() {
         while :; do
             for i in $(seq 0 3); do
                 printf "\r\033[0;36m[%c]\033[0m %s..." "${chars:$i:1}" "$text"
-                sleep 0.1
+                sleep 1 # Используем 1 секунду для совместимости с BusyBox
             done
         done
     }

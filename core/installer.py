@@ -1,81 +1,29 @@
 import os
-from configparser import ConfigParser
-from .shell_utils import run_command, run_command_streamed
+from .shell_utils import run_command_streamed
 
 class Installer:
     """
-    Класс для управления установкой и удалением системы обхода блокировок.
+    Класс для управления установкой, обновлением и удалением KDW Bot.
+    Все операции делегируются главному скрипту bootstrap.sh.
     """
-    def __init__(self, config_file="kdw.cfg"):
-        config = ConfigParser()
-        config.read(config_file, encoding='utf-8')
-        
-        self.install_marker = "/opt/etc/init.d/S99unblock"
-        self.install_script_path = config.get('installer', 'script_path', fallback='/bin/false')
-        self.network_interface = config.get('installer', 'network_interface', fallback='br0')
-        
+    def __init__(self, config_file=None):
         # Путь к главному скрипту, который мы будем скачивать
         self.bootstrap_script_url = "https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh"
         self.bootstrap_script_path = "/tmp/bootstrap.sh"
 
-    async def is_installed(self) -> bool:
+    async def run_update(self, update, context):
         """
-        Проверяет, установлена ли система, по наличию файла-маркера.
+        Выполняет обновление системы через bootstrap.sh.
         """
-        return os.path.exists(self.install_marker)
-
-    async def is_configured(self) -> bool:
-        """
-        Проверяет, настроена ли система (файл-маркер не пустой).
-        """
-        if not await self.is_installed():
-            return False
-        return os.path.getsize(self.install_marker) > 0
-
-    async def run_installation(self, update, context):
-        """
-        Выполняет установку базовых компонентов.
-        """
-        message = await update.message.reply_text("🚀 Начинаю установку...")
-
-        if not os.path.exists(self.install_script_path):
-            await message.edit_text(f"❌ Ошибка: Установочный скрипт не найден по пути {self.install_script_path}")
-            return
-
-        command = f"sh {self.install_script_path}"
-
-        await message.edit_text(f"⏳ Запускаю {command}... Это может занять несколько минут.\n\n<pre></pre>", parse_mode='HTML')
+        message = await update.message.reply_text("🚀 Начинаю обновление...")
         
-        return_code, full_log = await run_command_streamed(command, update, context, message)
-
-        if return_code == 0:
-            if await self.is_installed():
-                await message.edit_text(f"✅ Базовая установка завершена!\n\n<pre>{full_log}</pre>\n\nТеперь нужно настроить iptables. Пожалуйста, перезапустите бота командой /start.", parse_mode='HTML')
-            else:
-                await message.edit_text(f"⚠️ Установка завершилась, но маркер установки не был найден.\n\n<pre>{full_log}</pre>", parse_mode='HTML')
-        else:
-            await message.edit_text(f"❌ Установка завершилась с ошибкой.\n\n<pre>{full_log}</pre>", parse_mode='HTML')
-
-    async def configure_iptables(self, ss_port: int):
-        """
-        Создает S99unblock с правилами iptables.
-        """
-        script_content = f"""#!/bin/sh
-
-# Восстанавливаем ipset
-ipset create unblock hash:ip
-
-# Восстанавливаем правило iptables
-iptables -t nat -A PREROUTING -i {self.network_interface} -m set --match-set unblock dst -p tcp -j REDIRECT --to-port {ss_port}
-"""
-        try:
-            with open(self.install_marker, 'w') as f:
-                f.write(script_content)
-            
-            await run_command(f"chmod +x {self.install_marker}")
-            return True, "✅ Правила iptables успешно созданы."
-        except Exception as e:
-            return False, f"❌ Не удалось создать файл {self.install_marker}: {e}"
+        download_command = f"curl -sL -o {self.bootstrap_script_path} {self.bootstrap_script_url}"
+        run_command = f"sh {self.bootstrap_script_path} --update"
+        full_command = f"{download_command} && {run_command}"
+        
+        await run_command_streamed(full_command, update, context, message)
+        # Сообщение об успехе не требуется, так как скрипт bootstrap.sh сам все выведет
+        # и бот перезапустится.
 
     async def run_uninstallation(self, update, context):
         """
@@ -85,7 +33,6 @@ iptables -t nat -A PREROUTING -i {self.network_interface} -m set --match-set unb
         
         download_command = f"curl -sL -o {self.bootstrap_script_path} {self.bootstrap_script_url}"
         run_command = f"sh {self.bootstrap_script_path} --uninstall"
-        
         full_command = f"{download_command} && {run_command}"
         
         return_code, full_log = await run_command_streamed(full_command, update, context, message)
@@ -95,17 +42,11 @@ iptables -t nat -A PREROUTING -i {self.network_interface} -m set --match-set unb
         else:
             await message.edit_text(f"❌ Удаление завершилось с ошибкой.\n\n<pre>{full_log}</pre>", parse_mode='HTML')
 
-    async def run_reinstallation(self, update, context):
-        """
-        Выполняет переустановку системы через bootstrap.sh.
-        """
-        message = await update.message.reply_text("🚀 Начинаю переустановку...")
+    # Старые методы, связанные с установкой через `install.sh`, больше не нужны
+    # и могут быть удалены. Оставляем их пока для обратной совместимости,
+    # но они больше не вызываются из основного кода.
+    async def is_installed(self) -> bool:
+        return os.path.exists("/opt/etc/kdw/kdw_bot.py")
 
-        download_command = f"curl -sL -o {self.bootstrap_script_path} {self.bootstrap_script_url}"
-        run_command = f"sh {self.bootstrap_script_path} --reinstall"
-        
-        full_command = f"{download_command} && {run_command}"
-        
-        await run_command_streamed(full_command, update, context, message)
-        # Сообщение об успехе не требуется, так как скрипт bootstrap.sh сам все выведет
-        # и бот перезапустится.
+    async def is_configured(self) -> bool:
+        return os.path.exists("/opt/etc/kdw/kdw.cfg")

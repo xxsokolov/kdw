@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# KDW Bot Installer (Bootstrap)
+# KDW Bot Installer (Bootstrap) - Single Source of Truth
 # https://github.com/xxsokolov/KDW
 
 # --- Configuration ---
@@ -8,203 +8,247 @@ INSTALL_DIR="/opt/etc/kdw"
 VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
-CPYTHON_SRC_DIR="/opt/tmp/cpython_src"
-OPKG_DEPENDENCIES="python3 python3-pip jq git git-http"
-REQUIREMENTS_FILE="${INSTALL_DIR}/requirements.txt"
+OPKG_DEPENDENCIES="python3 python3-pip jq git git-http dnsmasq-full ipset shadowsocks-libev"
+MANIFEST_FILE="${INSTALL_DIR}/install.manifest"
 
 # --- Functions ---
-echo_step() {
-  echo "-> $1"
-}
-echo_success() {
-  # Green color
-  printf "\033[0;32m[OK] %s\033[0m\n" "$1"
-}
-echo_error() {
-  # Red color
-  printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"
-  rm -rf "$TMP_REPO_DIR"
-  rm -rf "$CPYTHON_SRC_DIR"
-  exit 1
-}
+echo_step() { printf "-> %s\n" "$1"; }
+echo_success() { printf "\033[0;32m[OK] %s\033[0m\n" "$1"; }
+echo_error() { printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"; exit 1; }
+add_to_manifest() { echo "$1" >> "$MANIFEST_FILE"; }
 
 # --- Argument Parsing ---
 ACTION="install"
-RECREATE_VENV="true"
+# Все аргументы после -- будут переданы в post-install логику
 POSTINST_ARGS=""
-while [ "$1" != "" ]; do
+if [ "$#" -gt 0 ]; then
     case $1 in
-        --install) ACTION="install" ;;
-        --reinstall) ACTION="reinstall" ;;
-        --uninstall) ACTION="uninstall" ;;
-        *) POSTINST_ARGS="$POSTINST_ARGS $1" ;;
+        --install|--update|--uninstall)
+            ACTION=${1#--}
+            shift
+            POSTINST_ARGS="$@"
+            ;;
+        *)
+            # Для обратной совместимости, если флаг не указан
+            ACTION="install"
+            POSTINST_ARGS="$@"
+            ;;
     esac
-    shift
-done
+fi
+
 
 # --- Action: Uninstall ---
 if [ "$ACTION" = "uninstall" ]; then
-    echo_step "Запуск удаления KDW Bot..."
-    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then
-         echo_step "Остановка службы KDW Bot..."
-         sh "${INSTALL_DIR}/opkg/prerm"
-         echo_success "Служба остановлена."
+    echo_step "Запуск полного удаления KDW Bot..."
+    if [ ! -f "$MANIFEST_FILE" ]; then
+        echo "Манифест установки не найден. Попытка стандартного удаления..."
+        [ -f /opt/etc/init.d/S99kdwbot ] && sh /opt/etc/init.d/S99kdwbot stop
+        rm -rf "$INSTALL_DIR" /opt/etc/init.d/S99kdwbot /opt/etc/init.d/S99unblock
+        opkg remove $OPKG_DEPENDENCIES
+        echo_success "Стандартное удаление завершено."
+        exit 0
     fi
 
-    echo "Удаление файлов и директорий..."
-    [ -f /opt/etc/init.d/S99kdwbot ] && rm -f /opt/etc/init.d/S99kdwbot && echo "  - /opt/etc/init.d/S99kdwbot"
-    [ -f /opt/etc/init.d/S99unblock ] && rm -f /opt/etc/init.d/S99unblock && echo "  - /opt/etc/init.d/S99unblock"
-    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR" && echo "  - $INSTALL_DIR (директория проекта)"
+    echo_step "Остановка служб..."
+    sh /opt/etc/init.d/S99kdwbot stop
+
+    echo_step "Удаление файлов и директорий из манифеста..."
+    tac "$MANIFEST_FILE" | while read -r line; do
+        type=$(echo "$line" | cut -d':' -f1)
+        path=$(echo "$line" | cut -d':' -f2-)
+        if [ "$type" = "file" ] || [ "$type" = "dir" ]; then
+            if [ -e "$path" ]; then
+                rm -rf "$path"
+                echo "  - $path"
+            fi
+        fi
+    done
+    echo_success "Файлы и директории удалены."
+
+    echo_step "Удаление системных пакетов из манифеста..."
+    opkg remove $(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2-)
+    echo_success "Системные пакеты удалены."
 
     echo_success "KDW Bot полностью удален."
     exit 0
 fi
 
-# --- Action: Install / Reinstall ---
-if [ "$ACTION" = "reinstall" ]; then
-    if [ -f "${INSTALL_DIR}/opkg/prerm" ]; then
-         echo_step "Остановка службы KDW Bot..."
-         sh "${INSTALL_DIR}/opkg/prerm"
-         echo_success "Служба остановлена."
-    fi
-    echo_step "Запуск переустановки KDW Bot..."
-
+# --- Action: Update ---
+if [ "$ACTION" = "update" ]; then
+    echo_step "Запуск обновления KDW Bot..."
+    CONFIG_BACKUP="/tmp/kdw.cfg.bak"
     if [ -f "${INSTALL_DIR}/kdw.cfg" ]; then
-        printf "Найден существующий файл конфигурации. Использовать его? (Y/n): "
-        read -r use_existing_config
-        if [ "$use_existing_config" != "n" ] && [ "$use_existing_config" != "N" ]; then
-            echo_step "Сохранение существующей конфигурации..."
-            EXISTING_TOKEN=$(grep -o 'token = .*' "${INSTALL_DIR}/kdw.cfg" | cut -d' ' -f3)
-            EXISTING_USER_ID=$(grep -o 'access_ids = \[.*\]' "${INSTALL_DIR}/kdw.cfg" | sed 's/access_ids = \[\(.*\)\]/\1/')
-
-            if [ -n "$EXISTING_TOKEN" ] && [ -n "$EXISTING_USER_ID" ]; then
-                POSTINST_ARGS="--token $EXISTING_TOKEN --user-id $EXISTING_USER_ID"
-                echo_success "Конфигурация сохранена."
-            fi
-        fi
+        echo_step "Создание резервной копии конфигурации..."
+        cp "${INSTALL_DIR}/kdw.cfg" "$CONFIG_BACKUP"
+        EXISTING_TOKEN=$(grep -o 'token = .*' "$CONFIG_BACKUP" | cut -d' ' -f3)
+        EXISTING_USER_ID=$(grep -o 'access_ids = \[.*\]' "$CONFIG_BACKUP" | sed 's/access_ids = \[\(.*\)\]/\1/')
+        POSTINST_ARGS="--token $EXISTING_TOKEN --user-id $EXISTING_USER_ID"
+        echo_success "Конфигурация сохранена."
     fi
 
-    if [ -d "$VENV_DIR" ]; then
-        printf "Сохранить существующее виртуальное окружение? (Y/n): "
-        read -r save_venv_choice
-        if [ "$save_venv_choice" = "n" ] || [ "$save_venv_choice" = "N" ]; then
-            RECREATE_VENV="true"
-        else
-            RECREATE_VENV="false"
-        fi
-    fi
+    echo_step "Скачивание последней версии установщика..."
+    curl -sL -o /tmp/bootstrap_new.sh https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh
+    if [ $? -ne 0 ]; then echo_error "Не удалось скачать новый установщик."; fi
 
-    VENV_BACKUP_FILE="/tmp/kdw_venv.tar.gz"
-    if [ "$RECREATE_VENV" = "false" ] && [ -d "$VENV_DIR" ]; then
-        echo_step "Создание резервной копии виртуального окружения..."
-        tar -czf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR" venv
-        if [ $? -ne 0 ]; then
-            echo_error "Не удалось создать архив venv."
-        else
-            echo_success "Резервная копия venv создана."
-        fi
-    fi
+    echo_step "Удаление старой версии..."
+    sh $0 --uninstall
 
-    echo_step "Удаляеме старую версию KDW Bot..."
-    rm -rf "$INSTALL_DIR"
-    echo_success "Старая версия удалена."
+    echo_step "Установка новой версии..."
+    sh /tmp/bootstrap_new.sh --install $POSTINST_ARGS
 
-    mkdir -p "$INSTALL_DIR"
-
-    if [ -f "$VENV_BACKUP_FILE" ]; then
-        echo_step "Восстановление виртуального окружения из резервной копии..."
-        tar -xzf "$VENV_BACKUP_FILE" -C "$INSTALL_DIR"
-        rm "$VENV_BACKUP_FILE"
-        echo_success "Виртуальное окружение восстановлено."
-    fi
+    rm /tmp/bootstrap_new.sh
+    [ -f "$CONFIG_BACKUP" ] && rm "$CONFIG_BACKUP"
+    echo_success "Обновление завершено!"
+    exit 0
 fi
 
+# --- Action: Install ---
 echo_step "Запуск установки KDW Bot..."
 
-# --- 1. Установка системных зависимостей ---
+if [ -d "$INSTALL_DIR" ]; then
+    echo_step "Обнаружена старая установка. Полное удаление перед новой установкой..."
+    sh $0 --uninstall
+    echo_success "Старая версия полностью удалена."
+fi
+
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
 opkg install $OPKG_DEPENDENCIES
-if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты. Проверьте работу opkg."; fi
+if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты."; fi
 echo_success "Системные зависимости установлены."
 
-# --- 2. Проверка и установка модуля VENV ---
-if [ "$RECREATE_VENV" = "true" ]; then
-    echo_step "Проверка модуля venv..."
-    if ! python3 -m venv --help > /dev/null 2>&1; then
-        echo_step "Модуль venv не найден. Попытка ручной установки..."
-
-        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
-
-        if [ -z "$PY_LIB_PATH" ]; then echo_error "Не удалось определить путь к библиотекам Python."; fi
-
-        echo_step "Клонирование исходного кода CPython v${PY_VER} в $CPYTHON_SRC_DIR..."
-        rm -rf "$CPYTHON_SRC_DIR"
-        git clone --depth=1 --branch="${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
-        if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
-
-        echo_step "Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
-        cp -r "${CPYTHON_SRC_DIR}/Lib/venv" "$PY_LIB_PATH/"
-        cp -r "${CPYTHON_SRC_DIR}/Lib/ensurepip" "$PY_LIB_PATH/"
-
-        rm -rf "$CPYTHON_SRC_DIR"
-        echo_success "Модуль venv успешно установлен."
-    else
-        echo_success "Модуль venv уже доступен."
-    fi
-fi
-
-# --- 3. Клонирование и выборочное копирование ---
 echo_step "Клонирование репозитория KDW Bot..."
 rm -rf "$TMP_REPO_DIR"
 git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
-echo_step "Копирование рабочих файлов в $INSTALL_DIR..."
-cp -r ${TMP_REPO_DIR}/core "$INSTALL_DIR/"
-cp -r ${TMP_REPO_DIR}/scripts "$INSTALL_DIR/"
-cp -r ${TMP_REPO_DIR}/opkg "$INSTALL_DIR/"
-cp ${TMP_REPO_DIR}/kdw_bot.py "$INSTALL_DIR/"
-cp ${TMP_REPO_DIR}/kdw.cfg.example "$INSTALL_DIR/"
-cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
+echo_step "Копирование рабочих файлов и создание манифеста..."
+rm -f "$MANIFEST_FILE"
+touch "$MANIFEST_FILE"
+mkdir -p "$INSTALL_DIR" && add_to_manifest "dir:$INSTALL_DIR"
 
+copy_and_manifest() {
+    src="$1"
+    dest="$2"
+    cp -r "$src" "$dest"
+    find "$dest" -mindepth 1 -exec sh -c '
+        for item do
+            if [ -d "$item" ]; then
+                add_to_manifest "dir:$item"
+            else
+                add_to_manifest "file:$item"
+            fi
+        done
+    ' sh {} +
+}
+
+copy_and_manifest "${TMP_REPO_DIR}/core" "${INSTALL_DIR}/"
+copy_and_manifest "${TMP_REPO_DIR}/kdw_bot.py" "${INSTALL_DIR}/"
+copy_and_manifest "${TMP_REPO_DIR}/kdw.cfg.example" "${INSTALL_DIR}/"
+copy_and_manifest "${TMP_REPO_DIR}/requirements.txt" "${INSTALL_DIR}/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 4. Установка прав на выполнение ---
-echo_step "Установка прав на выполнение для скриптов..."
-chmod +x ${INSTALL_DIR}/scripts/*.sh
-chmod +x ${INSTALL_DIR}/opkg/*
-echo_success "Права на выполнение установлены."
+for pkg in $OPKG_DEPENDENCIES; do add_to_manifest "pkg:$pkg"; done
+echo_success "Манифест пакетов создан."
 
-# --- 5. Создание и установка зависимостей в VENV ---
-if [ "$RECREATE_VENV" = "true" ]; then
-    echo_step "Создание виртуального окружения Python..."
-    python3 -m venv "$VENV_DIR"
-    if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
-    echo_success "Виртуальное окружение создано в $VENV_DIR"
+echo_step "Создание виртуального окружения Python..."
+python3 -m venv "$VENV_DIR"
+if [ $? -ne 0 ]; then echo_error "Не удалось создать виртуальное окружение."; fi
+add_to_manifest "dir:$VENV_DIR"
+echo_success "Виртуальное окружение создано."
 
-    echo_step "Обновление pip в виртуальном окружении..."
-    ${VENV_DIR}/bin/python -m pip install --upgrade pip
-    if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
+echo_step "Обновление pip..."
+${VENV_DIR}/bin/python -m pip install --upgrade pip
+if [ $? -ne 0 ]; then echo_error "Не удалось обновить pip."; fi
 
-    echo_step "Установка Python-библиотек в виртуальное окружение..."
-    ${VENV_DIR}/bin/pip install --upgrade -r "$REQUIREMENTS_FILE" --break-system-packages
-    if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
-    echo_success "Python-библиотеки установлены."
+echo_step "Установка Python-библиотек..."
+${VENV_DIR}/bin/pip install --upgrade -r "${INSTALL_DIR}/requirements.txt"
+if [ $? -ne 0 ]; then echo_error "Не удалось установить Python-библиотеки."; fi
+echo_success "Python-библиотеки установлены."
+
+# --- Финальная настройка ---
+echo_step "Финальная настройка..."
+
+# Парсим аргументы, переданные в bootstrap.sh
+for arg in $POSTINST_ARGS; do
+    case $arg in
+        --token=*) BOT_TOKEN="${arg#*=}" ;;
+        --user-id=*) USER_ID="${arg#*=}" ;;
+    esac
+done
+
+if [ -z "$BOT_TOKEN" ]; then
+  echo "Пожалуйста, введите данные для настройки бота:"
+  printf "1. Токен вашего Telegram бота: "
+  read BOT_TOKEN
+  if [ -z "$BOT_TOKEN" ]; then echo_error "Токен не может быть пустым."; fi
+  printf "2. Ваш Telegram User ID: "
+  read USER_ID
+  if [ -z "$USER_ID" ]; then echo_error "User ID не может быть пустым."; fi
+fi
+
+API_URL="https://api.telegram.org/bot$BOT_TOKEN/getMe"
+RESPONSE=$(curl -s "$API_URL")
+if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then echo_error "Не удалось связаться с Telegram API."; fi
+OK_STATUS=$(echo $RESPONSE | jq -r '.ok')
+if [ "$OK_STATUS" != "true" ]; then echo_error "Неверный токен: $RESPONSE"; fi
+BOT_USERNAME=$(echo $RESPONSE | jq -r '.result.username')
+echo_success "Токен верный. Бот: @$BOT_USERNAME"
+
+CONFIG_FILE="${INSTALL_DIR}/kdw.cfg"
+cat > "$CONFIG_FILE" << EOF
+[telegram]
+token = $BOT_TOKEN
+access_ids = [$USER_ID]
+[keenetic]
+host = 127.0.0.1
+port = 80
+user = admin
+password =
+EOF
+add_to_manifest "file:$CONFIG_FILE"
+echo_success "Конфигурационный файл создан."
+
+SERVICE_FILE="/opt/etc/init.d/S99kdwbot"
+cat > "$SERVICE_FILE" << EOF
+#!/bin/sh
+# KDW Bot Service
+BOT_PATH="${INSTALL_DIR}/kdw_bot.py"
+PYTHON_EXEC="${VENV_DIR}/bin/python"
+PID_FILE="/var/run/kdw_bot.pid"
+LOG_FILE="/opt/var/log/kdw_bot.log"
+
+start() {
+    if [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"; then return; fi
+    echo "Starting KDW Bot..."
+    \$PYTHON_EXEC \$BOT_PATH >> \$LOG_FILE 2>&1 &
+    echo \$! > \$PID_FILE
+}
+stop() {
+    if [ ! -f "\$PID_FILE" ]; then return; fi
+    PID=\$(cat \$PID_FILE)
+    if ps | grep -q "^\s*\$PID\s"; then kill \$PID; fi
+    rm -f \$PID_FILE
+}
+case "\$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 2; start ;;
+    *) echo "Usage: \$0 {start|stop|restart}" ;;
+esac
+EOF
+chmod +x "$SERVICE_FILE"
+add_to_manifest "file:$SERVICE_FILE"
+echo_success "Служба автозапуска создана."
+
+sh "$SERVICE_FILE" start
+sleep 3
+if [ -f /var/run/kdw_bot.pid ] && ps | grep -q "^\s*$(cat /var/run/kdw_bot.pid)\s"; then
+    echo_success "Процесс бота успешно запущен."
 else
-    echo_step "Пропуск создания/обновления виртуального окружения."
+    echo_error "Не удалось запустить процесс бота. См. /opt/var/log/kdw_bot.log"
 fi
 
-# --- 6. Запуск скрипта настройки ---
-POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
-if [ ! -f "$POSTINST_SCRIPT" ]; then
-    echo_error "Не удалось найти основной скрипт установки."
-fi
-
-echo_step "Запуск основного скрипта настройки..."
-chmod +x "$POSTINST_SCRIPT"
-sh "$POSTINST_SCRIPT" $POSTINST_ARGS --python-exec "${VENV_DIR}/bin/python"
-
+echo_success "Установка KDW Bot завершена!"
 exit 0

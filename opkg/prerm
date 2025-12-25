@@ -1,8 +1,0 @@
-#!/bin/sh
-
-echo "Остановка службы KDW Bot перед удалением..."
-if [ -f /etc/init.d/S99kdwbot ]; then
-    /etc/init.d/S99kdwbot stop
-fi
-
-exit 0

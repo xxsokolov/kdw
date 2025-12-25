@@ -18,7 +18,6 @@ from telegram.ext import (
     filters,
 )
 
-
 from core.log_utils import log as logger
 from core.installer import Installer
 from core.service_manager import ServiceManager
@@ -32,9 +31,6 @@ default_config_file = os.path.join(script_dir, "kdw.cfg")
 # Состояния для ConversationHandler
 (
     STATUS,
-    INSTALL,
-    CONFIGURE_IPTABLES,
-    AWAIT_SS_PORT,
     BYPASS_MENU,
     KEYS_MENU,
     LISTS_MENU,
@@ -47,28 +43,25 @@ default_config_file = os.path.join(script_dir, "kdw.cfg")
     SETTINGS_MENU,
     DANGER_ZONE,
     AWAIT_UNINSTALL_CONFIRMATION,
-) = range(16)
+) = range(13)
 
 # --- Инициализация ---
 if os.path.isfile(default_config_file):
     config = ConfigParser()
     config.read(default_config_file, encoding='utf-8')
 else:
-    # Используем логгер, чтобы ошибка попала в системный журнал
     logger.error(f"Error: Config file ({default_config_file}) not found!")
     sys.exit(1)
 
-installer = Installer(default_config_file)
+installer = Installer()
 service_manager = ServiceManager()
 list_manager = ListManager()
 key_manager = KeyManager()
 
 # --- Клавиатуры ---
-install_keyboard = [["🚀 Установить систему обхода"]]
-configure_keyboard = [["⚙️ Настроить iptables"]]
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
-settings_keyboard = [["☢️ Зона риска"], ["🔙 Назад"]]
-danger_zone_keyboard = [["🔄 Переустановить"], ["🗑️ Удалить"], ["🔙 Назад"]]
+settings_keyboard = [["🔄 Обновить"], ["☢️ Зона риска"], ["🔙 Назад"]]
+danger_zone_keyboard = [["🗑️ Удалить"], ["🔙 Назад"]]
 bypass_keyboard = [["Ключи", "Списки"], ["Статус служб"], ["🔙 Назад"]]
 keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
@@ -90,40 +83,8 @@ def private_access(f):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info(f"Start session for {user.full_name} ({user.id})")
-    if await installer.is_configured():
-        await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
-        return STATUS
-    elif await installer.is_installed():
-        await update.message.reply_text("Базовая установка завершена, но система еще не настроена.", reply_markup=ReplyKeyboardMarkup(configure_keyboard, resize_keyboard=True))
-        return CONFIGURE_IPTABLES
-    else:
-        await update.message.reply_text(f"👋 Привет, {user.full_name}!\nСистема обхода еще не установлена.", reply_markup=ReplyKeyboardMarkup(install_keyboard, resize_keyboard=True))
-        return INSTALL
-
-@private_access
-async def start_install(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await installer.run_installation(update, context)
-    return ConversationHandler.END
-
-@private_access
-async def ask_for_ss_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Пожалуйста, введите порт, на котором будет работать ss-redir (обычно 1080).", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
-    return AWAIT_SS_PORT
-
-@private_access
-async def configure_iptables(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        port = int(update.message.text)
-        success, message = await installer.configure_iptables(port)
-        await update.message.reply_text(message)
-        if success:
-            await update.message.reply_text("Настройка завершена! Пожалуйста, перезапустите бота командой /start.", reply_markup=ReplyKeyboardRemove())
-            return ConversationHandler.END
-        else:
-            return AWAIT_SS_PORT
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат порта. Пожалуйста, введите число.", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
-        return AWAIT_SS_PORT
+    await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
+    return STATUS
 
 @private_access
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -252,14 +213,14 @@ async def menu_danger_zone(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return DANGER_ZONE
 
 @private_access
-async def start_reinstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await installer.run_reinstallation(update, context)
+async def start_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await installer.run_update(update, context)
     return ConversationHandler.END
 
 @private_access
 async def ask_for_uninstall_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = """⚠️ **ВНИМАНИЕ!**
-Это действие **полностью удалит** бота, все его настройки, созданные файлы и установленные пакеты (`shadowsocks`, `dnsmasq` и т.д.).
+Это действие **полностью удалит** бота, все его настройки, созданные файлы и установленные пакеты.
 
 **Это действие необратимо.**
 
@@ -306,22 +267,16 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            INSTALL: [MessageHandler(filters.Regex('^🚀 Установить систему обхода$'), start_install)],
-            CONFIGURE_IPTABLES: [MessageHandler(filters.Regex('^⚙️ Настроить iptables$'), ask_for_ss_port)],
-            AWAIT_SS_PORT: [
-                MessageHandler(filters.Regex('^Отмена$'), start),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, configure_iptables),
-            ],
             STATUS: [
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
                 MessageHandler(filters.Regex('^Настройки$'), menu_settings),
             ],
             SETTINGS_MENU: [
+                MessageHandler(filters.Regex('^🔄 Обновить$'), start_update),
                 MessageHandler(filters.Regex('^☢️ Зона риска$'), menu_danger_zone),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
             DANGER_ZONE: [
-                MessageHandler(filters.Regex('^🔄 Переустановить$'), start_reinstall),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_for_uninstall_confirmation),
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
             ],

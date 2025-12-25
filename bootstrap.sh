@@ -122,6 +122,25 @@ opkg install --force-maintainer $OPKG_DEPENDENCIES
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты."; fi
 echo_success "Системные зависимости установлены."
 
+echo_step "Настройка базовых сервисов..."
+# Настройка Shadowsocks
+SHADOWSOCKS_INIT_SCRIPT="/opt/etc/init.d/S22shadowsocks"
+if [ -f "$SHADOWSOCKS_INIT_SCRIPT" ]; then
+    sed -i 's/ss-local/ss-redir/g' "$SHADOWSOCKS_INIT_SCRIPT"
+    chmod +x "$SHADOWSOCKS_INIT_SCRIPT"
+    add_to_manifest "file:$SHADOWSOCKS_INIT_SCRIPT"
+    echo_success "Shadowsocks настроен для работы в режиме редиректа."
+else
+    echo_error "Скрипт инициализации Shadowsocks не найден!"
+fi
+# Настройка dnsmasq
+if ! grep -q "conf-dir=/opt/etc/dnsmasq.d" /opt/etc/dnsmasq.conf; then
+    echo "conf-dir=/opt/etc/dnsmasq.d" >> /opt/etc/dnsmasq.conf
+fi
+add_to_manifest "file:/opt/etc/dnsmasq.conf"
+echo_success "Dnsmasq настроен."
+
+
 echo_step "Клонирование репозитория KDW Bot..."
 rm -rf "$TMP_REPO_DIR"
 git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"

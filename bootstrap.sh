@@ -50,7 +50,7 @@ if [ "$ACTION" = "uninstall" ]; then
     sh /opt/etc/init.d/S99kdwbot stop
 
     echo_step "Удаление файлов и директорий из манифеста..."
-    tac "$MANIFEST_FILE" | while read -r line; do
+    awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$MANIFEST_FILE" | while read -r line; do
         type=$(echo "$line" | cut -d':' -f1)
         path=$(echo "$line" | cut -d':' -f2-)
         if [ "$type" = "file" ] || [ "$type" = "dir" ]; then

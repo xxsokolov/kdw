@@ -25,16 +25,12 @@ POSTINST_ARGS=""
 # Простой и надежный парсинг первого аргумента
 if [ -n "$1" ]; then
     case $1 in
-        --install|--update|--uninstall)
-            ACTION=${1#--}
-            shift
-            POSTINST_ARGS="$@"
-            ;;
-        *)
-            # Для обратной совместимости, если флаг не указан
-            POSTINST_ARGS="$@"
-            ;;
+        --install) ACTION="install"; shift ;;
+        --update) ACTION="update"; shift ;;
+        --uninstall) ACTION="uninstall"; shift ;;
+        *) ACTION="install" ;;
     esac
+    POSTINST_ARGS="$@"
 fi
 
 # --- Action: Uninstall ---
@@ -44,8 +40,8 @@ if [ "$ACTION" = "uninstall" ]; then
         echo "Манифест установки не найден. Попытка стандартного удаления..."
         [ -f /opt/etc/init.d/S99kdwbot ] && sh /opt/etc/init.d/S99kdwbot stop
         rm -rf "$INSTALL_DIR" /opt/etc/init.d/S99kdwbot /opt/etc/init.d/S99unblock
-        # Удаляем пакеты в обратном порядке зависимостей
         opkg remove --force-depends $OPKG_DEPENDENCIES
+        rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
         echo_success "Стандартное удаление завершено."
         exit 0
     fi
@@ -68,6 +64,7 @@ if [ "$ACTION" = "uninstall" ]; then
 
     echo_step "Удаление системных пакетов из манифеста..."
     opkg remove --force-depends $(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2- | tr '\n' ' ')
+    rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
     echo_success "Системные пакеты удалены."
 
     echo_success "KDW Bot полностью удален."
@@ -114,7 +111,8 @@ fi
 
 echo_step "Установка системных зависимостей..."
 opkg update > /dev/null
-opkg install $OPKG_DEPENDENCIES
+# Используем --force-maintainer для перезаписи измененных конфигов
+opkg install --force-maintainer $OPKG_DEPENDENCIES
 if [ $? -ne 0 ]; then echo_error "Не удалось установить базовые пакеты."; fi
 echo_success "Системные зависимости установлены."
 
@@ -124,9 +122,10 @@ git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий."; fi
 
 echo_step "Копирование рабочих файлов и создание манифеста..."
+mkdir -p "$INSTALL_DIR"
 rm -f "$MANIFEST_FILE"
 touch "$MANIFEST_FILE"
-mkdir -p "$INSTALL_DIR" && add_to_manifest "dir:$INSTALL_DIR"
+add_to_manifest "dir:$INSTALL_DIR"
 
 copy_and_manifest() {
     src="$1"

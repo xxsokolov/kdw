@@ -132,19 +132,19 @@ echo_success "Системные зависимости установлены."
 if [ "$RECREATE_VENV" = "true" ]; then
     echo_step "Проверка модуля venv..."
     if ! python3 -m venv --help > /dev/null 2>&1; then
-        echo "  -> Модуль venv не найден. Попытка ручной установки..."
+        echo_step "Модуль venv не найден. Попытка ручной установки..."
 
         PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
 
         if [ -z "$PY_LIB_PATH" ]; then echo_error "Не удалось определить путь к библиотекам Python."; fi
 
-        echo "  -> Клонирование исходного кода CPython v${PY_VER} в $CPYTHON_SRC_DIR..."
+        echo_step "Клонирование исходного кода CPython v${PY_VER} в $CPYTHON_SRC_DIR..."
         rm -rf "$CPYTHON_SRC_DIR"
         git clone --depth=1 --branch="${PY_VER}" --single-branch https://github.com/python/cpython.git "$CPYTHON_SRC_DIR"
         if [ $? -ne 0 ]; then echo_error "Не удалось клонировать репозиторий CPython."; fi
 
-        echo "  -> Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
+        echo_step "Копирование модулей 'venv' и 'ensurepip' в ${PY_LIB_PATH}..."
         cp -r "${CPYTHON_SRC_DIR}/Lib/venv" "$PY_LIB_PATH/"
         cp -r "${CPYTHON_SRC_DIR}/Lib/ensurepip" "$PY_LIB_PATH/"
 
@@ -172,7 +172,13 @@ cp ${TMP_REPO_DIR}/requirements.txt "$INSTALL_DIR/"
 rm -rf "$TMP_REPO_DIR"
 echo_success "Файлы проекта успешно установлены."
 
-# --- 4. Создание и установка зависимостей в VENV ---
+# --- 4. Установка прав на выполнение ---
+echo_step "Установка прав на выполнение для скриптов..."
+chmod +x ${INSTALL_DIR}/scripts/*.sh
+chmod +x ${INSTALL_DIR}/opkg/*
+echo_success "Права на выполнение установлены."
+
+# --- 5. Создание и установка зависимостей в VENV ---
 if [ "$RECREATE_VENV" = "true" ]; then
     echo_step "Создание виртуального окружения Python..."
     python3 -m venv "$VENV_DIR"
@@ -191,7 +197,7 @@ else
     echo_step "Пропуск создания/обновления виртуального окружения."
 fi
 
-# --- 5. Запуск скрипта настройки ---
+# --- 6. Запуск скрипта настройки ---
 POSTINST_SCRIPT="${INSTALL_DIR}/opkg/postinst"
 if [ ! -f "$POSTINST_SCRIPT" ]; then
     echo_error "Не удалось найти основной скрипт установки."

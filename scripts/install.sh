@@ -16,7 +16,7 @@ echo "[1/5] Обновление списка пакетов opkg..."
 opkg update
 
 echo "[2/5] Установка минимально необходимых пакетов..."
-opkg install dnsmasq-full ipset shadowsocks-libev-ss-redir
+opkg install dnsmasq-full ipset shadowsocks-libev-ss-redir shadowsocks-libev-config
 
 # --- 2. Создание структуры директорий и файлов ---
 echo "[3/5] Создание структуры директорий и файлов..."

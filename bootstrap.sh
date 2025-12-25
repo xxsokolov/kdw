@@ -36,25 +36,21 @@ run_with_spinner() {
         while :; do
             for i in $(seq 0 3); do
                 printf "\r\033[0;36m[%c]\033[0m %s..." "${chars:$i:1}" "$text"
-                sleep 1 # Используем 1 секунду для совместимости с BusyBox
+                sleep 1
             done
         done
     }
 
     spinner &
     SPINNER_PID=$!
-    # Останавливаем спиннер при выходе из скрипта
     trap 'kill $SPINNER_PID 2>/dev/null' EXIT
 
-    # Выполняем команду, скрывая ее вывод
     OUTPUT=$($cmd 2>&1)
     EXIT_CODE=$?
 
-    # Останавливаем спиннер
     kill $SPINNER_PID 2>/dev/null
     trap - EXIT
 
-    # Очищаем строку
     printf "\r%80s\r" " "
 
     if [ $EXIT_CODE -ne 0 ]; then
@@ -126,7 +122,7 @@ if [ "$ACTION" = "uninstall" ]; then
     fi
 
     echo_step "Остановка служб..."
-    sh /opt/etc/init.d/S99kdwbot stop
+    if [ -f /opt/etc/init.d/S99kdwbot ]; then sh /opt/etc/init.d/S99kdwbot stop; fi
 
     PACKAGES_TO_REMOVE=$(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2- | tr '\n' ' ')
 
@@ -143,7 +139,9 @@ if [ "$ACTION" = "uninstall" ]; then
     done
     echo_success "Файлы и директории удалены."
 
-    run_with_spinner "Удаление системных пакетов..." opkg remove --force-depends $PACKAGES_TO_REMOVE
+    if [ -n "$PACKAGES_TO_REMOVE" ]; then
+        run_with_spinner "Удаление системных пакетов..." opkg remove --force-depends $PACKAGES_TO_REMOVE
+    fi
     rm -f /opt/etc/dnsmasq.conf /opt/etc/dnsmasq.conf-opkg
 
     echo_success "KDW Bot полностью удален."

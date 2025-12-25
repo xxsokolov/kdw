@@ -8,7 +8,9 @@ INSTALL_DIR="/opt/etc/kdw"
 VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/KDW.git"
 TMP_REPO_DIR="/opt/tmp/kdw_repo"
-OPKG_DEPENDENCIES="python3 python3-pip jq git git-http dnsmasq-full ipset shadowsocks-libev"
+# Зависимости, которые будут установлены и удалены вместе с проектом
+OPKG_DEPENDENCIES="python3 python3-pip jq git git-http dnsmasq-full ipset shadowsocks-libev-ss-redir"
+# Файл-манифест для чистого удаления
 MANIFEST_FILE="${INSTALL_DIR}/install.manifest"
 
 # --- Functions ---
@@ -19,9 +21,9 @@ add_to_manifest() { echo "$1" >> "$MANIFEST_FILE"; }
 
 # --- Argument Parsing ---
 ACTION="install"
-# Все аргументы после -- будут переданы в post-install логику
 POSTINST_ARGS=""
-if [ "$#" -gt 0 ]; then
+# Простой и надежный парсинг первого аргумента
+if [ -n "$1" ]; then
     case $1 in
         --install|--update|--uninstall)
             ACTION=${1#--}
@@ -30,12 +32,10 @@ if [ "$#" -gt 0 ]; then
             ;;
         *)
             # Для обратной совместимости, если флаг не указан
-            ACTION="install"
             POSTINST_ARGS="$@"
             ;;
     esac
 fi
-
 
 # --- Action: Uninstall ---
 if [ "$ACTION" = "uninstall" ]; then
@@ -44,7 +44,8 @@ if [ "$ACTION" = "uninstall" ]; then
         echo "Манифест установки не найден. Попытка стандартного удаления..."
         [ -f /opt/etc/init.d/S99kdwbot ] && sh /opt/etc/init.d/S99kdwbot stop
         rm -rf "$INSTALL_DIR" /opt/etc/init.d/S99kdwbot /opt/etc/init.d/S99unblock
-        opkg remove $OPKG_DEPENDENCIES
+        # Удаляем пакеты в обратном порядке зависимостей
+        opkg remove --force-depends $OPKG_DEPENDENCIES
         echo_success "Стандартное удаление завершено."
         exit 0
     fi
@@ -66,7 +67,7 @@ if [ "$ACTION" = "uninstall" ]; then
     echo_success "Файлы и директории удалены."
 
     echo_step "Удаление системных пакетов из манифеста..."
-    opkg remove $(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2-)
+    opkg remove --force-depends $(grep '^pkg:' "$MANIFEST_FILE" | cut -d':' -f2- | tr '\n' ' ')
     echo_success "Системные пакеты удалены."
 
     echo_success "KDW Bot полностью удален."
@@ -131,15 +132,13 @@ copy_and_manifest() {
     src="$1"
     dest="$2"
     cp -r "$src" "$dest"
-    find "$dest" -mindepth 1 -exec sh -c '
-        for item do
-            if [ -d "$item" ]; then
-                add_to_manifest "dir:$item"
-            else
-                add_to_manifest "file:$item"
-            fi
-        done
-    ' sh {} +
+    find "$dest" -mindepth 1 | while read -r item; do
+        if [ -d "$item" ]; then
+            add_to_manifest "dir:$item"
+        else
+            add_to_manifest "file:$item"
+        fi
+    done
 }
 
 copy_and_manifest "${TMP_REPO_DIR}/core" "${INSTALL_DIR}/"

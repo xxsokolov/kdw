@@ -29,7 +29,7 @@ PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-s
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="
     shadowsocks-libev-ss-redir:shadowsocks
-    trojan-plus:trojan
+    trojan:trojan
     v2ray-core:v2ray
     tor:tor
     dnsmasq-full:dnsmasq
@@ -253,23 +253,40 @@ EOF
 
 # --- 6. Точка входа ---
 
-# Сохраняем все аргументы для возможной передачи
-ARGS="$@"
-
 case "$1" in
-    --uninstall) do_uninstall; exit 0 ;;
-    --install)   shift; do_install "$@" ;;
+    --uninstall)
+        echo "ВНИМАНИЕ: Это действие полностью удалит бота, все его компоненты и конфигурационные файлы."
+        printf "Вы уверены, что хотите продолжить? (y/n): "
+        read -r confirmation
+        if [ "$confirmation" = "y" ] || [ "$confirmation" = "Y" ]; then
+            do_uninstall
+        else
+            echo "Удаление отменено."
+        fi
+        exit 0
+        ;;
+    --install)
+        shift
+        do_install "$@"
+        ;;
     --update)
+        echo "ВНИМАНИЕ: Обновление включает в себя полное удаление текущей версии и установку последней."
+        echo "Ваш конфигурационный файл (токен и ID) будет сохранен и использован для новой установки."
+        printf "Вы уверены, что хотите продолжить? (y/n): "
+        read -r confirmation
+        if [ "$confirmation" != "y" ] && [ "$confirmation" != "Y" ]; then
+            echo "Обновление отменено."
+            exit 0
+        fi
+
         echo_step "Начало процесса обновления..."
         CONFIG_ARGS=""
         if [ -f "$INSTALL_DIR/kdw.cfg" ]; then
-            # Более надежный способ извлечь токен и ID
             TOKEN=$(awk -F' = ' '/^token =/ {print $2}' "$INSTALL_DIR/kdw.cfg")
             USER_ID=$(sed -n 's/^access_ids = \[\(.*\)\].*/\1/p' "$INSTALL_DIR/kdw.cfg")
             [ -n "$TOKEN" ] && [ -n "$USER_ID" ] && CONFIG_ARGS="--token=$TOKEN --user-id=$USER_ID"
         fi
 
-        # Гарантированная очистка временного файла
         TMP_SCRIPT="/tmp/bootstrap_update.sh"
         trap "rm -f '$TMP_SCRIPT'" EXIT HUP INT QUIT TERM
 
@@ -277,10 +294,10 @@ case "$1" in
             echo_err "Не удалось скачать скрипт обновления."
         fi
 
-        # Запускаем новый скрипт с нужными аргументами
         do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS
 
-        echo_ok "Обновление завершено." ;;
+        echo_ok "Обновление завершено."
+        ;;
     *)
         echo "Использование: $0 КОМАНДА [ПАРАМЕТРЫ]"
         echo ""

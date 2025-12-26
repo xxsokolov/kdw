@@ -7,6 +7,11 @@
 #   Единый скрипт для установки, обновления и удаления
 #   Telegram-бота для управления роутером Keenetic.
 #
+# Использование:
+#   sh bootstrap.sh --install [--token=TOKEN --user-id=ID]
+#   sh bootstrap.sh --update
+#   sh bootstrap.sh --uninstall
+#
 # Автор: xxsokolov
 # GitHub: https://github.com/xxsokolov/KDW
 # =================================================================
@@ -141,7 +146,7 @@ do_install() {
         esac
     done
 
-    if [ -z "$BOT_TOKEN" ]; then
+    if [ -z "$BOT_TOKEN" ] || [ -z "$USER_ID" ]; then
       echo_step "Настройка доступа"
       printf "Введите Telegram Bot Token: "
       read BOT_TOKEN
@@ -248,6 +253,9 @@ EOF
 
 # --- 6. Точка входа ---
 
+# Сохраняем все аргументы для возможной передачи
+ARGS="$@"
+
 case "$1" in
     --uninstall) do_uninstall; exit 0 ;;
     --install)   shift; do_install "$@" ;;
@@ -269,8 +277,21 @@ case "$1" in
             echo_err "Не удалось скачать скрипт обновления."
         fi
 
+        # Запускаем новый скрипт с нужными аргументами
         do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS
 
         echo_ok "Обновление завершено." ;;
-    *) echo "Использование: $0 {--install|--update|--uninstall}" ;;
+    *)
+        echo "Использование: $0 КОМАНДА [ПАРАМЕТРЫ]"
+        echo ""
+        echo "Команды:"
+        echo "  --install      Установить бота. Можно указать параметры доступа:"
+        echo "                   --token=<BOT_TOKEN>"
+        echo "                   --user-id=<USER_ID>"
+        echo "  --update       Обновить бота до последней версии"
+        echo "  --uninstall    Полностью удалить бота и его компоненты"
+        echo ""
+        echo "Пример:"
+        echo "  $0 --install --token=123:ABC --user-id=456"
+        ;;
 esac

@@ -14,7 +14,7 @@
 # --- 1. Конфигурация ---
 INSTALL_DIR="/opt/etc/kdw"
 VENV_DIR="${INSTALL_DIR}/venv"
-REPO_URL="github.com"
+REPO_URL="https://github.com/xxsokolov/kdw.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список пакетов, доступных для mipselsf-k3.4

@@ -15,6 +15,7 @@
 INSTALL_DIR="/opt/etc/kdw"
 VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/kdw.git"
+CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
@@ -60,7 +61,7 @@ run_with_spinner() {
         while :; do
             for i in 0 1 2 3; do
                 printf "\r\033[0;36m[%c]\033[0m %s..." "${chars:$i:1}" "$text"
-                sleep 0.5
+                sleep 1
             done
         done
     }
@@ -103,13 +104,22 @@ do_uninstall() {
         echo_step "Удаление компонентов по манифесту..."
         # Читаем манифест с конца, чтобы сначала удалять файлы, затем папки
         sed '1!G;h;$!d' "$MANIFEST" | while IFS=: read -r type path; do
-            case $type in
-                file|dir) [ -e "$path" ] && rm -rf "$path" ;;
-                pkg) opkg remove "$path" --autoremove >/dev/null 2>&1 ;;
+            # Проверка, что путь находится внутри /opt/
+            case "$path" in
+                /opt/*)
+                    case $type in
+                        file|dir) [ -e "$path" ] && rm -rf "$path" ;;
+                        pkg) opkg remove "$path" --autoremove >/dev/null 2>&1 ;;
+                    esac
+                    ;;
+                *)
+                    echo "  ! Пропуск удаления небезопасного пути: $path"
+                    ;;
             esac
         done
     fi
-    rm -rf "$INSTALL_DIR"
+    # Удаляем саму директорию установки в конце
+    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
     manage_services "delete"
     # Очистка временных файлов конфигурации Entware
     find /opt/etc/ -name "*-opkg" -delete
@@ -122,11 +132,22 @@ do_install() {
     [ -d "$INSTALL_DIR" ] && echo_err "Бот уже установлен. Используйте --update."
 
     # Первичная настройка доступа
-    echo_step "Настройка доступа"
-    printf "Введите Telegram Bot Token: "
-    read BOT_TOKEN
-    printf "Введите ваш Telegram User ID: "
-    read USER_ID
+    BOT_TOKEN=""
+    USER_ID=""
+    for arg in "$@"; do
+        case $arg in
+            --token=*) BOT_TOKEN="${arg#*=}" ;;
+            --user-id=*) USER_ID="${arg#*=}" ;;
+        esac
+    done
+
+    if [ -z "$BOT_TOKEN" ]; then
+      echo_step "Настройка доступа"
+      printf "Введите Telegram Bot Token: "
+      read BOT_TOKEN
+      printf "Введите ваш Telegram User ID: "
+      read USER_ID
+    fi
 
     run_with_spinner "Обновление списка пакетов opkg" opkg update
     run_with_spinner "Установка системных зависимостей" opkg install $PKGS
@@ -156,8 +177,10 @@ do_install() {
     if ! python3 -m venv --help >/dev/null 2>&1; then
         echo_step "Восстановление модуля venv (Entware fix)..."
         tmp_v="/opt/tmp/v_fix"; mkdir -p "$tmp_v"
-        run_with_spinner "Загрузка исходников модулей Python" git clone --depth=1 --branch=3.11 github.com "$tmp_v"
-        cp -r "$tmp_v/Lib/venv" "$tmp_v/Lib/ensurepip" /opt/lib/python3.11/
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
+        run_with_spinner "Загрузка исходников модулей Python" git clone --depth=1 --branch="v$PY_VER" "$CPYTHON_REPO_URL" "$tmp_v"
+        cp -r "$tmp_v/Lib/venv" "$tmp_v/Lib/ensurepip" "$PY_LIB_PATH/"
         rm -rf "$tmp_v"
     fi
 
@@ -227,16 +250,27 @@ EOF
 
 case "$1" in
     --uninstall) do_uninstall; exit 0 ;;
-    --install)   do_install ;;
+    --install)   shift; do_install "$@" ;;
     --update)
         echo_step "Начало процесса обновления..."
-        # Сохранение пользовательского конфига перед полной переустановкой
-        [ -f "$INSTALL_DIR/kdw.cfg" ] && cp "$INSTALL_DIR/kdw.cfg" "/tmp/kdw.cfg.bak"
-        # Скачивание новой версии скрипта с обходом кэша CDN GitHub
-        curl -sL "raw.githubusercontent.com(date +%s)" -o /tmp/bs.sh
-        do_uninstall && sh /tmp/bs.sh --install
-        # Восстановление конфига
-        [ -f "/tmp/kdw.cfg.bak" ] && mv "/tmp/kdw.cfg.bak" "$INSTALL_DIR/kdw.cfg"
+        CONFIG_ARGS=""
+        if [ -f "$INSTALL_DIR/kdw.cfg" ]; then
+            # Более надежный способ извлечь токен и ID
+            TOKEN=$(awk -F' = ' '/^token =/ {print $2}' "$INSTALL_DIR/kdw.cfg")
+            USER_ID=$(sed -n 's/^access_ids = \[\(.*\)\].*/\1/p' "$INSTALL_DIR/kdw.cfg")
+            [ -n "$TOKEN" ] && [ -n "$USER_ID" ] && CONFIG_ARGS="--token=$TOKEN --user-id=$USER_ID"
+        fi
+
+        # Гарантированная очистка временного файла
+        TMP_SCRIPT="/tmp/bootstrap_update.sh"
+        trap "rm -f '$TMP_SCRIPT'" EXIT HUP INT QUIT TERM
+
+        if ! curl -sL "https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh?$(date +%s)" -o "$TMP_SCRIPT"; then
+            echo_err "Не удалось скачать скрипт обновления."
+        fi
+
+        do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS
+
         echo_ok "Обновление завершено." ;;
     *) echo "Использование: $0 {--install|--update|--uninstall}" ;;
 esac

@@ -109,16 +109,17 @@ do_uninstall() {
         echo_step "Удаление компонентов по манифесту..."
         # Читаем манифест с конца, чтобы сначала удалять файлы, затем папки
         sed '1!G;h;$!d' "$MANIFEST" | while IFS=: read -r type path; do
-            # Проверка, что путь находится внутри /opt/
-            case "$path" in
-                /opt/*)
-                    case $type in
-                        file|dir) [ -e "$path" ] && rm -rf "$path" ;;
-                        pkg) opkg remove "$path" --autoremove >/dev/null 2>&1 ;;
+            case $type in
+                file|dir)
+                    # Для файлов и папок проверяем, что они внутри /opt/
+                    case "$path" in
+                        /opt/*) [ -e "$path" ] && rm -rf "$path" ;;
+                        *) echo "  ! Пропуск удаления небезопасного пути: $path" ;;
                     esac
                     ;;
-                *)
-                    echo "  ! Пропуск удаления небезопасного пути: $path"
+                pkg)
+                    # Пакеты удаляем без проверки пути
+                    opkg remove "$path" --autoremove >/dev/null 2>&1
                     ;;
             esac
         done

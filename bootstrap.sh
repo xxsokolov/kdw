@@ -256,13 +256,16 @@ EOF
 case "$1" in
     --uninstall)
         echo "ВНИМАНИЕ: Это действие полностью удалит бота, все его компоненты и конфигурационные файлы."
-        printf "Вы уверены, что хотите продолжить? (y/n): "
+        printf "Вы уверены, что хотите продолжить? (y/N): "
         read -r confirmation
-        if [ "$confirmation" = "y" ] || [ "$confirmation" = "Y" ]; then
-            do_uninstall
-        else
-            echo "Удаление отменено."
-        fi
+        case "$confirmation" in
+            [yY]|[yY][eE][sS])
+                do_uninstall
+                ;;
+            *)
+                echo "Удаление отменено."
+                ;;
+        esac
         exit 0
         ;;
     --install)
@@ -272,12 +275,17 @@ case "$1" in
     --update)
         echo "ВНИМАНИЕ: Обновление включает в себя полное удаление текущей версии и установку последней."
         echo "Ваш конфигурационный файл (токен и ID) будет сохранен и использован для новой установки."
-        printf "Вы уверены, что хотите продолжить? (y/n): "
+        printf "Вы уверены, что хотите продолжить? (y/N): "
         read -r confirmation
-        if [ "$confirmation" != "y" ] && [ "$confirmation" != "Y" ]; then
-            echo "Обновление отменено."
-            exit 0
-        fi
+        case "$confirmation" in
+            [yY]|[yY][eE][sS])
+                # Продолжаем, если ответ 'y' или 'yes'
+                ;;
+            *)
+                echo "Обновление отменено."
+                exit 0
+                ;;
+        esac
 
         echo_step "Начало процесса обновления..."
         CONFIG_ARGS=""

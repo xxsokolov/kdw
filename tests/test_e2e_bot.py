@@ -67,39 +67,23 @@ async def test_full_bot_flow(bot_container: Container):
 
     try:
         # --- 1. Сценарий "чистой" системы ---
-        bot_container.exec_run("rm -f /etc/init.d/S99unblock")
+        # Мокаем удаление, чтобы система была "чистой"
+        bot_container.exec_run("rm -rf /opt/etc/kdw")
         bot_container.restart()
         await asyncio.sleep(5)
 
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, '/start')
-        response = await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
+        # Этот сценарий больше не актуален, так как бот не проверяет установку
+        # response = await wait_for_bot_response(client, bot_username, last_id, "Система обхода еще не установлена")
 
-        # --- 2. Мокаем базовую установку и переходим к настройке ---
-        bot_container.exec_run("touch /etc/init.d/S99unblock")
-        bot_container.restart()
-        await asyncio.sleep(5)
-
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, '/start')
-        response = await wait_for_bot_response(client, bot_username, last_id, "система еще не настроена")
-        assert isinstance(response.reply_markup, ReplyKeyboardMarkup)
-        assert any(b.text == "⚙️ Настроить iptables" for row in response.reply_markup.rows for b in row.buttons)
-
-        # --- 3. Настраиваем iptables ---
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "⚙️ Настроить iptables")
-        await wait_for_bot_response(client, bot_username, last_id, "Пожалуйста, введите порт")
-
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "1080")
-        await wait_for_bot_response(client, bot_username, last_id, "Правила iptables успешно созданы")
-
-        # --- 4. Проверяем, что система полностью настроена ---
+        # --- 2. Проверяем, что система полностью настроена ---
+        # Для E2E теста предполагаем, что система уже установлена и настроена
+        # Создаем мок-файлы, чтобы симулировать установку
+        bot_container.exec_run("mkdir -p /opt/etc/kdw")
+        bot_container.exec_run("touch /opt/etc/kdw/kdw_bot.py")
+        bot_container.exec_run("touch /opt/etc/kdw/kdw.cfg")
         bot_container.restart()
         await asyncio.sleep(5)
 
@@ -108,7 +92,29 @@ async def test_full_bot_flow(bot_container: Container):
         await client.send_message(bot_username, '/start')
         await wait_for_bot_response(client, bot_username, last_id, "👋 Привет")
 
-        # --- 5. Сценарий удаления ---
+        # --- 3. Сценарий обновления ---
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, "Настройки")
+        await wait_for_bot_response(client, bot_username, last_id, "Меню настроек.")
+
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, "🔄 Обновить")
+        # Ожидаем сообщение о начале обновления
+        await wait_for_bot_response(client, bot_username, last_id, "🚀 Начинаю обновление...", timeout=60)
+
+        # После обновления бот должен перезапуститься, даем ему время
+        await asyncio.sleep(10)
+
+        # Проверяем, что бот снова отвечает
+        last_messages = await client.get_messages(bot_username, limit=1)
+        last_id = last_messages[0].id if last_messages else 0
+        await client.send_message(bot_username, '/start')
+        await wait_for_bot_response(client, bot_username, last_id, "👋 Привет")
+
+
+        # --- 4. Сценарий удаления ---
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, "Настройки")
@@ -122,17 +128,12 @@ async def test_full_bot_flow(bot_container: Container):
         last_messages = await client.get_messages(bot_username, limit=1)
         last_id = last_messages[0].id if last_messages else 0
         await client.send_message(bot_username, "🗑️ Удалить")
-        await wait_for_bot_response(client, bot_username, last_id, "Для подтверждения, пожалуйста, отправьте в ответ фразу")
-
-        # Правильное подтверждение
-        last_messages = await client.get_messages(bot_username, limit=1)
-        last_id = last_messages[0].id if last_messages else 0
-        await client.send_message(bot_username, "да, удалить все")
+        # Теперь бот сразу начинает удаление и выводит лог
         await wait_for_bot_response(client, bot_username, last_id, "Система полностью удалена.", timeout=60)
 
         # Проверяем, что маркер удален
-        exec_result = bot_container.exec_run("test -f /etc/init.d/S99unblock")
-        assert exec_result.exit_code != 0, "Файл-маркер установки НЕ был удален."
+        exec_result = bot_container.exec_run("test -d /opt/etc/kdw")
+        assert exec_result.exit_code != 0, "Директория установки НЕ была удалена."
 
     finally:
         await client.disconnect()

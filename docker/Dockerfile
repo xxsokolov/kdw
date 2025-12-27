@@ -20,10 +20,12 @@ COPY . .
 # /etc/init.d - стандартный путь для init-скриптов в Alpine/OpenWrt
 RUN mkdir -p /etc/init.d /opt/etc/unblock /opt/bin
 
-# Делаем скрипты исполняемыми
+# Делаем основной скрипт исполняемым
 RUN chmod +x bootstrap.sh
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x scripts/install.sh
+
+# Копируем entrypoint в корень и делаем его исполняемым для надежности
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Копируем и делаем исполняемыми скрипты из референсного проекта
 RUN sed -i '1s|#!/bin/bash|#!/bin/sh|' bypass_keenetic-main/unblock_update.sh
@@ -35,4 +37,4 @@ COPY bypass_keenetic-main/unblocksh.txt /opt/etc/unblock/unblocksh.txt
 COPY bypass_keenetic-main/unblocktor.txt /opt/etc/unblock/unblocktor.txt
 
 # Указываем, что при запуске контейнера нужно выполнить наш entrypoint
-ENTRYPOINT ["/opt/etc/kdw/docker/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]

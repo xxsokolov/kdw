@@ -6,8 +6,9 @@ import traceback
 from configparser import ConfigParser
 from ast import literal_eval
 from functools import wraps
+import asyncio
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -16,6 +17,7 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     filters,
+    CallbackQueryHandler,
 )
 
 from core.log_utils import log as logger
@@ -41,9 +43,7 @@ default_config_file = os.path.join(script_dir, "kdw.cfg")
     AWAIT_VMESS_KEY,
     AWAIT_TROJAN_KEY,
     SETTINGS_MENU,
-    DANGER_ZONE,
-    AWAIT_UNINSTALL_CONFIRMATION,
-) = range(13)
+) = range(11)
 
 # --- Инициализация ---
 if os.path.isfile(default_config_file):
@@ -60,8 +60,7 @@ key_manager = KeyManager()
 
 # --- Клавиатуры ---
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
-settings_keyboard = [["🔄 Обновить"], ["☢️ Зона риска"], ["🔙 Назад"]]
-danger_zone_keyboard = [["🗑️ Удалить"], ["🔙 Назад"]]
+settings_keyboard = [["🔄 Обновить", "🗑️ Удалить"], ["🔙 Назад"]]
 bypass_keyboard = [["Ключи", "Списки"], ["Статус служб"], ["🔙 Назад"]]
 keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
@@ -77,6 +76,37 @@ def private_access(f):
         else:
             await update.message.reply_text('❌ У вас нет доступа к этому боту.', reply_markup=ReplyKeyboardRemove())
     return wrapped
+
+# --- Хелперы для подтверждения ---
+async def remove_confirmation_keyboard(context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет inline-клавиатуру и сообщает о таймауте."""
+    job = context.job
+    await context.bot.edit_message_text(
+        chat_id=job.chat_id,
+        message_id=job.data['message_id'],
+        text=f"{job.data['text']}\n\n_(Время на подтверждение истекло)_",
+        reply_markup=None
+    )
+
+async def ask_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, text: str):
+    """Отправляет сообщение с кнопками подтверждения и запускает таймер."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_{action}"),
+            InlineKeyboardButton("❌ Отмена", callback_data="confirm_cancel"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    message = await update.message.reply_text(text, reply_markup=reply_markup)
+
+    # Запускаем задачу на удаление клавиатуры через 30 секунд
+    context.job_queue.run_once(
+        remove_confirmation_keyboard,
+        30,
+        chat_id=update.effective_chat.id,
+        data={'message_id': message.message_id, 'text': text},
+        name=f"confirm_{update.effective_chat.id}"
+    )
 
 # --- Основные обработчики ---
 @private_access
@@ -208,35 +238,40 @@ async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return SETTINGS_MENU
 
 @private_access
-async def menu_danger_zone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Вы вошли в зону риска. Эти действия могут нарушить работу системы.", reply_markup=ReplyKeyboardMarkup(danger_zone_keyboard, resize_keyboard=True))
-    return DANGER_ZONE
+async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await ask_confirmation(update, context, "update", "Вы уверены, что хотите обновить бота до последней версии?")
+    return SETTINGS_MENU
 
 @private_access
-async def start_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await installer.run_update(update, context)
-    return ConversationHandler.END
+async def ask_uninstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await ask_confirmation(update, context, "uninstall", "Вы уверены, что хотите **полностью** удалить бота?")
+    return SETTINGS_MENU
 
 @private_access
-async def ask_for_uninstall_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = """⚠️ **ВНИМАНИЕ!**
-Это действие **полностью удалит** бота, все его настройки, созданные файлы и установленные пакеты.
+async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
 
-**Это действие необратимо.**
+    # Удаляем таймер, так как пользователь нажал кнопку
+    jobs = context.job_queue.get_jobs_by_name(f"confirm_{update.effective_chat.id}")
+    for job in jobs:
+        job.schedule_removal()
 
-Для подтверждения, пожалуйста, отправьте в ответ фразу:
-`да, удалить все`"""
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
-    return AWAIT_UNINSTALL_CONFIRMATION
+    action = query.data.split('_')[1]
 
-@private_access
-async def handle_uninstall_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.text == "да, удалить все":
-        await installer.run_uninstallation(update, context)
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text("Неверная фраза подтверждения. Удаление отменено.", reply_markup=ReplyKeyboardMarkup(danger_zone_keyboard, resize_keyboard=True))
-        return DANGER_ZONE
+    if action == "cancel":
+        await query.edit_message_text("Действие отменено.", reply_markup=None)
+        return
+
+    if action == "update":
+        await query.edit_message_text("Начинаю обновление...", reply_markup=None)
+        # Запускаем в фоне, чтобы не блокировать бота
+        asyncio.create_task(installer.run_update(update, context))
+
+    elif action == "uninstall":
+        await query.edit_message_text("Начинаю полное удаление...", reply_markup=None)
+        # Запускаем в фоне, чтобы не блокировать бота
+        asyncio.create_task(installer.run_uninstallation(update, context))
 
 # --- Обработчик ошибок ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -272,17 +307,9 @@ def main() -> None:
                 MessageHandler(filters.Regex('^Настройки$'), menu_settings),
             ],
             SETTINGS_MENU: [
-                MessageHandler(filters.Regex('^🔄 Обновить$'), start_update),
-                MessageHandler(filters.Regex('^☢️ Зона риска$'), menu_danger_zone),
+                MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
+                MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
-            ],
-            DANGER_ZONE: [
-                MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_for_uninstall_confirmation),
-                MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
-            ],
-            AWAIT_UNINSTALL_CONFIRMATION: [
-                MessageHandler(filters.Regex('^Отмена$'), menu_danger_zone),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_uninstall_confirmation),
             ],
             BYPASS_MENU: [
                 MessageHandler(filters.Regex('^Ключи$'), menu_keys),
@@ -323,6 +350,7 @@ def main() -> None:
     )
 
     application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^confirm_'))
     application.add_error_handler(error_handler)
     logger.info("KDW Bot запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

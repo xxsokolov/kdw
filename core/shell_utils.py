@@ -15,19 +15,29 @@ async def run_command(command: str):
 
     return (
         process.returncode,
-        stdout.decode('utf-8', errors='replace').strip(), # Добавлено errors='replace'
-        stderr.decode('utf-8', errors='replace').strip()  # Добавлено errors='replace'
+        stdout.decode('utf-8', errors='replace').strip(),
+        stderr.decode('utf-8', errors='replace').strip()
     )
 
-async def run_command_streamed(command: str, update, context, message):
+async def run_command_streamed(command: str, update, context, message, stdin_input: bytes = None):
     """
-    Выполняет команду и стримит ее вывод в Telegram сообщение.
+    Выполняет команду, опционально передавая ей данные в stdin,
+    и стримит ее вывод в Telegram сообщение.
     """
     process = await asyncio.create_subprocess_shell(
         command,
+        stdin=asyncio.subprocess.PIPE if stdin_input else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT  # Объединяем stdout и stderr
     )
+
+    # Асинхронно передаем данные в stdin и закрываем его
+    if stdin_input and process.stdin:
+        try:
+            process.stdin.write(stdin_input)
+            await process.stdin.drain()
+        finally:
+            process.stdin.close()
 
     full_log = ""
     last_sent_time = 0
@@ -41,7 +51,7 @@ async def run_command_streamed(command: str, update, context, message):
         if not line:
             break
 
-        decoded_line = line.decode('utf-8', errors='replace').strip() # Добавлено errors='replace'
+        decoded_line = line.decode('utf-8', errors='replace').strip()
         full_log += decoded_line + "\n"
 
         current_time = asyncio.get_event_loop().time()
@@ -52,9 +62,6 @@ async def run_command_streamed(command: str, update, context, message):
                 last_sent_time = current_time
             except Exception:
                 pass
-    
-    # УДАЛЕНО: Финальное обновление сообщения из run_command_streamed.
-    # Теперь это ответственность вызывающей функции (installer.py).
 
     await process.wait()
     return process.returncode, full_log

@@ -67,9 +67,10 @@ main_keyboard = [["Система обхода", "Роутер"], ["Настро
 settings_keyboard = [
     ["🔄 Обновить", "🗑️ Удалить"],
     ["⚙️ Перезагрузить службы", "📝 Уровень логов"],
+    ["📊 Статус служб"],
     ["🔙 Назад"]
 ]
-bypass_keyboard = [["Ключи", "Списки"], ["Статус служб"], ["🔙 Назад"]]
+bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
 cancel_keyboard = [["Отмена"]]
@@ -147,11 +148,11 @@ async def menu_bypass_system(update: Update, context: ContextTypes.DEFAULT_TYPE)
 @private_access
 async def menu_services_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    log.info("Запрошен статус служб", extra={'user_id': user_id})
+    log.debug("Запрошен статус служб", extra={'user_id': user_id})
     await update.message.reply_text("⏳ Проверяю статус служб...")
     status_report = await service_manager.get_all_statuses()
     await update.message.reply_text(f"Статус служб:\n\n{status_report}")
-    return BYPASS_MENU
+    return SETTINGS_MENU
 
 # --- Меню списков ---
 @private_access
@@ -179,7 +180,7 @@ async def select_list_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def show_list_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
-    log.info(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
     content = list_manager.read_list(list_name)
     if len(content) > 4096:
         for x in range(0, len(content), 4096):
@@ -201,7 +202,7 @@ async def add_domains_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.info(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
     added = await list_manager.add_to_list(list_name, domains)
     if added:
         await update.message.reply_text("✅ Домены добавлены. Применяю изменения...")
@@ -225,7 +226,7 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.info(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
     removed = await list_manager.remove_from_list(list_name, domains)
     if removed:
         await update.message.reply_text("✅ Домены удалены. Применяю изменения...")
@@ -255,7 +256,7 @@ async def ask_for_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_
 async def handle_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     key_string = update.message.text
-    log.info("Получен ключ Shadowsocks для обработки", extra={'user_id': user_id})
+    log.debug("Получен ключ Shadowsocks для обработки", extra={'user_id': user_id})
     await update.message.reply_text("⏳ Обрабатываю ключ...", reply_markup=ReplyKeyboardRemove())
     success, message = await key_manager.update_shadowsocks_config(key_string)
     await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
@@ -311,7 +312,7 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         job.schedule_removal()
 
     action = query.data.split('_', 1)[1]
-    log.info(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
+    log.debug(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
 
     if action == "cancel":
         await query.edit_message_text("Действие отменено.", reply_markup=None)
@@ -436,12 +437,12 @@ def main() -> None:
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
                 MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
                 MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
+                MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
             BYPASS_MENU: [
                 MessageHandler(filters.Regex('^Ключи$'), menu_keys),
                 MessageHandler(filters.Regex('^Списки$'), menu_lists),
-                MessageHandler(filters.Regex('^Статус служб$'), menu_services_status),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
             LISTS_MENU: [

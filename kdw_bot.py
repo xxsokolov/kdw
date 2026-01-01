@@ -65,9 +65,9 @@ key_manager = KeyManager()
 # --- Клавиатуры ---
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
 settings_keyboard = [
+    ["📊 Статус служб", "📝 Уровень логирования"],
+    ["⚙️ Перезагрузить службы", "🤖 Перезагрузить бота"],
     ["🔄 Обновить", "🗑️ Удалить"],
-    ["⚙️ Перезагрузить службы", "📝 Уровень логов"],
-    ["📊 Статус служб"],
     ["🔙 Назад"]
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
@@ -79,8 +79,12 @@ cancel_keyboard = [["Отмена"]]
 def private_access(f):
     @wraps(f)
     async def wrapped(update, context, *args, **kwargs):
-        user_id = update.effective_user.id
-        if user_id in literal_eval(config.get("telegram", "access_ids")):
+        # В callback_query update.effective_user может быть None
+        user = update.effective_user
+        if not user and update.callback_query:
+            user = update.callback_query.from_user
+
+        if user and user.id in literal_eval(config.get("telegram", "access_ids")):
             return await f(update, context, *args, **kwargs)
         else:
             # Обработка как для message, так и для callback_query
@@ -92,12 +96,12 @@ def private_access(f):
 
 # --- Хелперы для подтверждения ---
 async def remove_confirmation_keyboard(context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет inline-клавиатуру и сообщает о таймауте."""
+    """Удаляет inline-клавиатуру и сообщает о тайм-ауте."""
     job = context.job
     await context.bot.edit_message_text(
         chat_id=job.chat_id,
         message_id=job.data['message_id'],
-        text=f"{job.data['text']}\n\n_(Время на подтверждение истекло)_",
+        text=f"{job.data['text']}\n\n🚫 Отменено по таймауту",
         reply_markup=None
     )
 
@@ -300,6 +304,11 @@ async def ask_restart_services(update: Update, context: ContextTypes.DEFAULT_TYP
     await ask_confirmation(update, context, "restart_services", "Вы уверены, что хотите перезагрузить все службы обхода?")
     return SETTINGS_MENU
 
+@private_access
+async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await ask_confirmation(update, context, "restart_bot", "Вы уверены, что хотите перезагрузить бота?")
+    return SETTINGS_MENU
+
 # --- Обработчики Inline кнопок ---
 @private_access
 async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -330,6 +339,15 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("⏳ Перезапускаю службы...", reply_markup=None)
         report = await service_manager.restart_all_services()
         await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}", reply_markup=None)
+    
+    elif action == "restart_bot":
+        await query.edit_message_text("⏳ Перезагружаюсь...", reply_markup=None)
+        # Устанавливаем переменную окружения с ID чата для подтверждения
+        os.environ['KDW_RESTART_CHAT_ID'] = str(query.message.chat_id)
+        # Даем небольшую задержку, чтобы Telegram успел обработать edit_message_text
+        await asyncio.sleep(1)
+        os.execv(sys.executable, ['python3'] + sys.argv)
+
 
 @private_access
 async def handle_log_level_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -412,6 +430,25 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     await context.bot.send_message(chat_id=admin_id, text=message, parse_mode=ParseMode.HTML)
 
 
+async def post_restart_hook(application: Application):
+    """
+    Проверяет, был ли бот перезапущен, и отправляет подтверждение.
+    """
+    restarted_chat_id = os.environ.get('KDW_RESTART_CHAT_ID')
+    if restarted_chat_id:
+        log.info(f"Бот был перезапущен. Отправка подтверждения в чат {restarted_chat_id}.")
+        try:
+            await application.bot.send_message(
+                chat_id=restarted_chat_id,
+                text="✅ Бот успешно перезагружен!"
+            )
+        except Exception as e:
+            log.error(f"Не удалось отправить подтверждение о перезапуске: {e}")
+        finally:
+            # Удаляем переменную, чтобы избежать повторной отправки
+            del os.environ['KDW_RESTART_CHAT_ID']
+
+
 def main() -> None:
     # Создаем объект для сохранения состояния
     persistence = PicklePersistence(filepath=persistence_file)
@@ -422,6 +459,7 @@ def main() -> None:
         .token(config.get("telegram", "token"))
         .job_queue(job_queue)
         .persistence(persistence)
+        .post_init(post_restart_hook) # Добавляем хук после инициализации
         .build()
     )
 
@@ -436,8 +474,9 @@ def main() -> None:
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
                 MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
-                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
+                MessageHandler(filters.Regex('^📝 Уровень логирования$'), menu_logging),
                 MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
+                MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
             BYPASS_MENU: [

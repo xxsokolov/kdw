@@ -20,6 +20,7 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler,
     JobQueue,
+    PicklePersistence,
 )
 
 from core.log_utils import log, set_level as set_log_level
@@ -31,6 +32,7 @@ from core.key_manager import KeyManager
 # --- Глобальные переменные и константы ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
+persistence_file = os.path.join(script_dir, "persitencebot")
 
 # Состояния для ConversationHandler
 (
@@ -410,11 +412,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def main() -> None:
+    # Создаем объект для сохранения состояния
+    persistence = PicklePersistence(filepath=persistence_file)
+    
     job_queue = JobQueue()
     application = (
         Application.builder()
         .token(config.get("telegram", "token"))
         .job_queue(job_queue)
+        .persistence(persistence)
         .build()
     )
 
@@ -468,6 +474,8 @@ def main() -> None:
             ],
         },
         fallbacks=[CommandHandler('start', start)],
+        persistent=True,
+        name="main_conversation"
     )
 
     application.add_handler(conv_handler)

@@ -217,19 +217,72 @@ EOF
     cat > "$SERVICE_FILE" << EOF
 #!/bin/sh
 # KDW Bot Service (Entware)
+
+NAME="KDW Bot"
 BOT_PATH="${INSTALL_DIR}/kdw_bot.py"
 PYTHON_EXEC="${VENV_DIR}/bin/python"
 PID_FILE="/var/run/kdw_bot.pid"
+
+# ANSI Color Codes
+C_GREEN='\033[0;32m'
+C_RED='\033[0;31m'
+C_RESET='\033[0m'
+
+is_running() {
+    [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"
+}
+
 start() {
-    if [ -f "\$PID_FILE" ]; then return; fi
-    \$PYTHON_EXEC \$BOT_PATH > /dev/null 2>&1 &
+    echo -n "Starting \$NAME... "
+    if is_running; then
+        echo -e "[${C_RED}FAILED${C_RESET}] (already running)"
+        logger -p user.err "\$NAME start failed: already running"
+        return 1
+    fi
+
+    \$PYTHON_EXEC \$BOT_PATH >/dev/null 2>&1 &
     echo \$! > \$PID_FILE
+    sleep 1
+
+    if is_running; then
+        echo -e "[${C_GREEN}OK${C_RESET}]"
+        logger "\$NAME start: ok"
+    else
+        echo -e "[${C_RED}FAILED${C_RESET}] (process not found after start)"
+        logger -p user.err "\$NAME start failed: process not found after start"
+        rm -f \$PID_FILE
+        return 1
+    fi
 }
+
 stop() {
-    [ -f "\$PID_FILE" ] && kill \$(cat \$PID_FILE) && rm -f \$PID_FILE
+    echo -n "Stopping \$NAME... "
+    if ! is_running; then
+        echo -e "[${C_GREEN}OK${C_RESET}] (already stopped)"
+        logger "\$NAME stop: ok (already stopped)"
+        return 0
+    fi
+
+    kill \$(cat \$PID_FILE)
+    rm -f \$PID_FILE
+    echo -e "[${C_GREEN}OK${C_RESET}]"
+    logger "\$NAME stop: ok"
 }
+
+status() {
+    if is_running; then
+        echo -e "\$NAME is ${C_GREEN}running${C_RESET}."
+    else
+        echo -e "\$NAME is ${C_RED}stopped${C_RESET}."
+    fi
+}
+
 case "\$1" in
-    start) start ;; stop) stop ;; restart) stop; sleep 2; start ;;
+    start) start ;;
+    stop) stop ;;
+    restart) \$0 stop; sleep 2; \$0 start ;;
+    status) status ;;
+    *) echo "Usage: \$0 {start|stop|restart|status}" >&2; exit 1 ;;
 esac
 EOF
     chmod +x "$SERVICE_FILE"
@@ -247,8 +300,7 @@ EOF
     echo_ok "УСТАНОВКА ЗАВЕРШЕНА!"
     echo "------------------------------------------------------"
     echo "Бот успешно запущен. Проверьте сообщения в Telegram."
-    echo "Логирование: /opt/var/log/kdw_bot.log"
-    echo "Управление: sh $0 {--update|--uninstall}"
+    echo "Управление: sh $SERVICE_FILE {start|stop|restart|status}"
     echo "------------------------------------------------------"
 }
 

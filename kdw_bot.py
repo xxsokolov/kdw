@@ -1,3 +1,12 @@
+"""
+Основной файл телеграм-бота для управления KDW.
+
+Этот файл содержит всю логику работы бота, включая:
+- Определение состояний диалога (ConversationHandler).
+- Обработчики команд и сообщений.
+- Функции для взаимодействия с модулями ядра (установщик, менеджеры сервисов, списков, конфигов).
+- Настройку и запуск приложения `python-telegram-bot`.
+"""
 import sys
 import os
 import json
@@ -27,14 +36,14 @@ from core.log_utils import log, set_level as set_log_level
 from core.installer import Installer
 from core.service_manager import ServiceManager
 from core.list_manager import ListManager
-from core.key_manager import KeyManager
+from core.config_manager import ConfigManager
 
 # --- Глобальные переменные и константы ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 persistence_file = os.path.join(script_dir, "persitencebot")
 
-# Состояния для ConversationHandler
+# Состояния для ConversationHandler. Определяют шаги диалога с пользователем.
 (
     STATUS,
     BYPASS_MENU,
@@ -43,13 +52,14 @@ persistence_file = os.path.join(script_dir, "persitencebot")
     SHOW_LIST,
     ADD_TO_LIST,
     REMOVE_FROM_LIST,
-    AWAIT_SHADOWSOCKS_KEY,
-    AWAIT_VMESS_KEY,
-    AWAIT_TROJAN_KEY,
     SETTINGS_MENU,
+    KEY_TYPE_MENU,
+    KEY_LIST_MENU,
+    AWAIT_KEY_URL,
 ) = range(11)
 
 # --- Инициализация ---
+# Загрузка конфигурации и инициализация основных модулей ядра.
 if os.path.isfile(default_config_file):
     config = ConfigParser()
     config.read(default_config_file, encoding='utf-8')
@@ -60,26 +70,31 @@ else:
 installer = Installer()
 service_manager = ServiceManager()
 list_manager = ListManager()
-key_manager = KeyManager()
 
 # --- Клавиатуры ---
+# Определение раскладок кнопок для различных меню.
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
 settings_keyboard = [
-    ["📊 Статус служб", "📝 Уровень логирования"],
+    ["📊 Статус служб", "📝 Уровень логов"],
     ["⚙️ Перезагрузить службы", "🤖 Перезагрузить бота"],
     ["🔄 Обновить", "🗑️ Удалить"],
     ["🔙 Назад"]
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
-keys_keyboard = [["Shadowsocks", "Trojan"], ["Vmess"], ["🔙 Назад"]]
-lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
+key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
+key_list_keyboard = [["➕ Добавить"], ["🔙 Назад"]]
 cancel_keyboard = [["Отмена"]]
+lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
+
 
 # --- Декораторы ---
 def private_access(f):
+    """
+    Декоратор для ограничения доступа к функциям только для авторизованных пользователей.
+    ID авторизованных пользователей берутся из конфиг-файла.
+    """
     @wraps(f)
     async def wrapped(update, context, *args, **kwargs):
-        # В callback_query update.effective_user может быть None
         user = update.effective_user
         if not user and update.callback_query:
             user = update.callback_query.from_user
@@ -87,17 +102,24 @@ def private_access(f):
         if user and user.id in literal_eval(config.get("telegram", "access_ids")):
             return await f(update, context, *args, **kwargs)
         else:
-            # Обработка как для message, так и для callback_query
             if update.callback_query:
                 await update.callback_query.answer("❌ У вас нет доступа к этому боту.", show_alert=True)
+                return
             else:
                 await update.message.reply_text('❌ У вас нет доступа к этому боту.', reply_markup=ReplyKeyboardRemove())
+                return ConversationHandler.END
     return wrapped
 
-# --- Хелперы для подтверждения ---
+# --- Вспомогательные функции (хелперы) ---
 async def remove_confirmation_keyboard(context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет inline-клавиатуру и сообщает о тайм-ауте."""
+    """
+    Удаляет инлайн-клавиатуру подтверждения по истечении времени.
+    Вызывается через `JobQueue`.
+    """
     job = context.job
+    if not (job and isinstance(job.data, dict) and 'message_id' in job.data and 'text' in job.data):
+        return
+
     await context.bot.edit_message_text(
         chat_id=job.chat_id,
         message_id=job.data['message_id'],
@@ -106,7 +128,16 @@ async def remove_confirmation_keyboard(context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def ask_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, text: str):
-    """Отправляет сообщение с кнопками подтверждения и запускает таймер."""
+    """
+    Отправляет сообщение с инлайн-кнопками "Подтвердить" и "Отмена".
+    Запускает задачу на удаление этих кнопок через 30 секунд.
+
+    Args:
+        update: Объект Update от Telegram.
+        context: Контекст бота.
+        action (str): Строка действия для `callback_data` (например, "update").
+        text (str): Текст сообщения, запрашивающего подтверждение.
+    """
     user_id = update.effective_user.id
     log.debug(f"Запрос подтверждения '{action}'", extra={'user_id': user_id})
     keyboard = [
@@ -126,41 +157,230 @@ async def ask_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         name=f"confirm_{update.effective_chat.id}"
     )
 
-# --- Основные обработчики ---
+async def clear_key_config_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """
+    Удаляет ранее отправленные сообщения со списком конфигураций ключей.
+    ID сообщений хранятся в `context.user_data['key_config_messages']`.
+
+    Args:
+        context: Контекст бота.
+        chat_id (int): ID чата, в котором нужно удалить сообщения.
+    """
+    if 'key_config_messages' in context.user_data:
+        for msg_id in context.user_data['key_config_messages']:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                log.debug(f"Could not delete message {msg_id}: {e}")
+        context.user_data['key_config_messages'] = []
+
+# --- Обработчики главного меню ---
 @private_access
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Начальная точка диалога. Вызывается по команде /start.
+    Приветствует пользователя и показывает главное меню.
+    """
     user = update.message.from_user
     log.info(f"Start session for {user.full_name}", extra={'user_id': user.id})
     await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
     return STATUS
 
 @private_access
-async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def back_to_main_menu(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Возвращает пользователя в главное меню из других разделов.
+    """
     user_id = update.effective_user.id
     log.debug("Возврат в главное меню", extra={'user_id': user_id})
     await update.message.reply_text("Главное меню", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
     return STATUS
 
 @private_access
-async def menu_bypass_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def menu_bypass_system(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Переводит пользователя в меню управления системой обхода.
+    """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Система обхода'", extra={'user_id': user_id})
     await update.message.reply_text("Меню управления системой обхода.", reply_markup=ReplyKeyboardMarkup(bypass_keyboard, resize_keyboard=True))
     return BYPASS_MENU
 
-# --- Меню служб ---
+# --- Обработчики меню управления ключами ---
 @private_access
-async def menu_services_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def menu_keys(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Переводит в меню выбора типа ключа ('Shadowsocks', 'Trojan' и т.д.).
+    Очищает предыдущие сообщения со списками ключей.
+    """
     user_id = update.effective_user.id
-    log.debug("Запрошен статус служб", extra={'user_id': user_id})
-    await update.message.reply_text("⏳ Проверяю статус служб...")
-    status_report = await service_manager.get_all_statuses()
-    await update.message.reply_text(f"Статус служб:\n\n{status_report}")
-    return SETTINGS_MENU
+    log.debug("Переход в меню 'Ключи'", extra={'user_id': user_id})
+    await clear_key_config_messages(context, update.effective_chat.id)
+    await update.message.reply_text("Выберите тип ключа:", reply_markup=ReplyKeyboardMarkup(key_types_keyboard, resize_keyboard=True))
+    return KEY_TYPE_MENU
 
-# --- Меню списков ---
 @private_access
-async def menu_lists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def menu_key_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает выбор типа ключа, сохраняет его в `user_data` и
+    переходит к отображению списка ключей этого типа.
+    """
+    user_id = update.effective_user.id
+    key_type = update.message.text.lower()
+    
+    if key_type not in ['shadowsocks', 'trojan', 'vmess']:
+        await update.message.reply_text("Пожалуйста, используйте кнопки.")
+        return KEY_TYPE_MENU
+
+    log.debug(f"Выбран тип ключа: {key_type}", extra={'user_id': user_id})
+    context.user_data['key_type'] = key_type
+    
+    if key_type in ['trojan', 'vmess']:
+        log.warning(f"Вызвана нереализованная функция для '{key_type}'", extra={'user_id': user_id})
+        await update.message.reply_text(f"Управление ключами типа '{key_type}' еще не реализовано.", reply_markup=ReplyKeyboardMarkup(key_types_keyboard, resize_keyboard=True))
+        return KEY_TYPE_MENU
+
+    await menu_key_list(update, context)
+    return KEY_LIST_MENU
+
+async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает список конфигураций для выбранного типа ключа.
+    Для каждой конфигурации выводит инлайн-кнопки для действий.
+    """
+    key_type = context.user_data['key_type']
+    manager = ConfigManager(key_type)
+    
+    configs = manager.get_configs()
+    active_config = manager.get_active_config()
+    
+    await clear_key_config_messages(context, update.effective_chat.id)
+
+    if not configs:
+        await update.effective_chat.send_message(f"Не найдено ни одного конфига для {key_type}.", reply_markup=ReplyKeyboardMarkup(key_list_keyboard, resize_keyboard=True))
+        return KEY_LIST_MENU
+
+    msg_list_header = await update.effective_chat.send_message(f"Список конфигураций для *{key_type}*:", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup(key_list_keyboard, resize_keyboard=True))
+    context.user_data['key_config_messages'].append(msg_list_header.message_id)
+
+    for config_path in configs:
+        is_active = (config_path == active_config)
+        filename = os.path.basename(config_path)
+        
+        buttons = [
+            InlineKeyboardButton("👁️ Показать", callback_data=f"key_view_{key_type}_{filename}"),
+            InlineKeyboardButton("🗑️ Удалить", callback_data=f"key_delete_{key_type}_{filename}"),
+        ]
+        if not is_active:
+            buttons.insert(0, InlineKeyboardButton("🚀 Актив.", callback_data=f"key_activate_{key_type}_{filename}"))
+
+        text = f"📄 `{filename}`"
+        if is_active:
+            text = f"✅ *{text}* (активен)"
+
+        msg = await update.effective_chat.send_message(
+            text=text,
+            reply_markup=InlineKeyboardMarkup([buttons]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        context.user_data['key_config_messages'].append(msg.message_id)
+        
+    return KEY_LIST_MENU
+
+@private_access
+async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает нажатия на инлайн-кнопки для действий с ключами (показать, удалить, активировать).
+    Этот обработчик находится вне `ConversationHandler`.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    if not query.message:
+        log.warning("query.message is None in handle_key_action")
+        return
+
+    user_id = query.from_user.id
+    try:
+        _, action, key_type, filename = query.data.split('_', 3)
+    except ValueError:
+        log.error(f"Invalid callback_data format in handle_key_action: {query.data}")
+        await query.answer("Произошла ошибка, попробуйте снова.", show_alert=True)
+        return
+
+    # Обновляем контекст, на случай если пользователь нажал на кнопку в старом сообщении
+    context.user_data['key_type'] = key_type
+    
+    manager = ConfigManager(key_type)
+    config_path = os.path.join(manager.path, filename)
+
+    log.info(f"Действие с ключом: '{action}' для '{filename}' (тип: {key_type})", extra={'user_id': user_id})
+
+    if action == 'view':
+        config_data = manager.read_config(config_path)
+        if config_data:
+            await query.message.reply_text(f"```json\n{json.dumps(config_data, indent=2)}\n```", parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            await query.message.reply_text("Не удалось прочитать конфиг.")
+    
+    elif action == 'delete':
+        if manager.delete_config(config_path):
+            await query.edit_message_text(f"🗑️ Конфиг `{filename}` удален.", parse_mode=ParseMode.MARKDOWN)
+        else:
+            await query.answer("❌ Ошибка удаления", show_alert=True)
+
+    elif action == 'activate':
+        if manager.set_active_config(config_path):
+            await query.message.reply_text(f"🚀 Конфиг `{filename}` активирован. Перезапустите службу, чтобы применить.", parse_mode=ParseMode.MARKDOWN)
+            # Поскольку обработчик вне диалога, обновляем список вручную
+            await menu_key_list(update, context)
+        else:
+            await query.answer("❌ Ошибка активации", show_alert=True)
+
+@private_access
+async def ask_for_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает у пользователя URL ключа для добавления.
+    """
+    user_id = update.effective_user.id
+    key_type = context.user_data['key_type']
+    log.debug(f"Запрошено добавление ключа типа '{key_type}'", extra={'user_id': user_id})
+    await update.message.reply_text(
+        f"Отправьте URL ключа (например, ss://...)",
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+    )
+    return AWAIT_KEY_URL
+
+@private_access
+async def handle_new_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает полученный URL, создает из него файл конфигурации
+    и обновляет список ключей.
+    """
+    user_id = update.effective_user.id
+    url = update.message.text
+    key_type = context.user_data['key_type']
+    manager = ConfigManager(key_type)
+
+    log.info(f"Получен URL для создания ключа типа '{key_type}'", extra={'user_id': user_id})
+    
+    filepath = manager.create_from_url(url)
+    
+    if filepath:
+        filename = os.path.basename(filepath)
+        await update.message.reply_text(f"✅ Конфиг `{filename}` успешно создан.", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("❌ Не удалось создать конфиг. Проверьте формат URL.")
+        
+    await menu_key_list(update, context)
+    return KEY_LIST_MENU
+
+# --- Обработчики меню управления списками ---
+@private_access
+async def menu_lists(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню для управления списками доменов.
+    """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Списки'", extra={'user_id': user_id})
     lists = list_manager.get_list_files()
@@ -173,6 +393,9 @@ async def menu_lists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 @private_access
 async def select_list_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает выбор конкретного списка и показывает меню действий с ним.
+    """
     user_id = update.effective_user.id
     list_name = update.message.text
     context.user_data['current_list'] = list_name
@@ -182,9 +405,12 @@ async def select_list_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @private_access
 async def show_list_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Показывает содержимое выбранного списка доменов.
+    """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
-    log.debug(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
+    log.info(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
     content = list_manager.read_list(list_name)
     if len(content) > 4096:
         for x in range(0, len(content), 4096):
@@ -195,6 +421,9 @@ async def show_list_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @private_access
 async def ask_for_domains_to_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает у пользователя домены для добавления в список.
+    """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     log.debug(f"Запрошено добавление в список '{list_name}'", extra={'user_id': user_id})
@@ -203,14 +432,17 @@ async def ask_for_domains_to_add(update: Update, context: ContextTypes.DEFAULT_T
 
 @private_access
 async def add_domains_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Добавляет полученные домены в список и применяет изменения.
+    """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.debug(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
+    log.info(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
     added = await list_manager.add_to_list(list_name, domains)
     if added:
         await update.message.reply_text("✅ Домены добавлены. Применяю изменения...")
-        success, message = await list_manager.apply_changes()
+        _success, message = await list_manager.apply_changes()
         await update.message.reply_text(message)
     else:
         await update.message.reply_text("ℹ️ Эти домены уже были в списке.")
@@ -219,6 +451,9 @@ async def add_domains_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @private_access
 async def ask_for_domains_to_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает у пользователя домены для удаления из списка.
+    """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     log.debug(f"Запрошено удаление из списка '{list_name}'", extra={'user_id': user_id})
@@ -227,130 +462,123 @@ async def ask_for_domains_to_remove(update: Update, context: ContextTypes.DEFAUL
 
 @private_access
 async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Удаляет полученные домены из списка и применяет изменения.
+    """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.debug(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
+    log.info(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
     removed = await list_manager.remove_from_list(list_name, domains)
     if removed:
         await update.message.reply_text("✅ Домены удалены. Применяю изменения...")
-        success, message = await list_manager.apply_changes()
+        _success, message = await list_manager.apply_changes()
         await update.message.reply_text(message)
     else:
         await update.message.reply_text("ℹ️ Этих доменов не было в списке.")
     await update.message.reply_text(f"Выбран список: *{list_name}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
 
-# --- Меню ключей ---
+# --- Обработчики меню настроек ---
 @private_access
-async def menu_keys(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    log.debug("Переход в меню 'Ключи'", extra={'user_id': user_id})
-    await update.message.reply_text("Меню управления ключами.", reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
-    return KEYS_MENU
-
-@private_access
-async def ask_for_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    log.debug("Запрошено добавление ключа Shadowsocks", extra={'user_id': user_id})
-    await update.message.reply_text("Пожалуйста, отправьте ключ в формате ss://...", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
-    return AWAIT_SHADOWSOCKS_KEY
-
-@private_access
-async def handle_shadowsocks_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    key_string = update.message.text
-    log.debug("Получен ключ Shadowsocks для обработки", extra={'user_id': user_id})
-    await update.message.reply_text("⏳ Обрабатываю ключ...", reply_markup=ReplyKeyboardRemove())
-    success, message = await key_manager.update_shadowsocks_config(key_string)
-    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
-    return KEYS_MENU
-
-# --- Заглушки для других ключей ---
-@private_access
-async def ask_for_vmess_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    log.warning("Вызвана нереализованная функция 'Vmess'", extra={'user_id': user_id})
-    await update.message.reply_text("Эта функция еще не реализована.", reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
-    return KEYS_MENU
-
-@private_access
-async def ask_for_trojan_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    log.warning("Вызвана нереализованная функция 'Trojan'", extra={'user_id': user_id})
-    await update.message.reply_text("Эта функция еще не реализована.", reply_markup=ReplyKeyboardMarkup(keys_keyboard, resize_keyboard=True))
-    return KEYS_MENU
-
-# --- Меню настроек ---
-@private_access
-async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def menu_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню настроек.
+    """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Настройки'", extra={'user_id': user_id})
     await update.message.reply_text("Меню настроек.", reply_markup=ReplyKeyboardMarkup(settings_keyboard, resize_keyboard=True))
     return SETTINGS_MENU
 
 @private_access
+async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Показывает статус системных служб.
+    """
+    user_id = update.effective_user.id
+    log.info("Запрошен статус служб", extra={'user_id': user_id})
+    await update.message.reply_text("⏳ Проверяю статус служб...")
+    status_report = await service_manager.get_all_statuses()
+    await update.message.reply_text(f"Статус служб:\n\n{status_report}")
+    return SETTINGS_MENU
+
+@private_access
 async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает подтверждение на обновление бота.
+    """
     await ask_confirmation(update, context, "update", "Вы уверены, что хотите обновить бота до последней версии?")
     return SETTINGS_MENU
 
 @private_access
 async def ask_uninstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает подтверждение на полное удаление бота.
+    """
     await ask_confirmation(update, context, "uninstall", "Вы уверены, что хотите **полностью** удалить бота?")
     return SETTINGS_MENU
 
 @private_access
 async def ask_restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает подтверждение на перезапуск служб.
+    """
     await ask_confirmation(update, context, "restart_services", "Вы уверены, что хотите перезагрузить все службы обхода?")
     return SETTINGS_MENU
 
 @private_access
 async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запрашивает подтверждение на перезапуск самого бота.
+    """
     await ask_confirmation(update, context, "restart_bot", "Вы уверены, что хотите перезагрузить бота?")
     return SETTINGS_MENU
 
-# --- Обработчики Inline кнопок ---
 @private_access
-async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает нажатия на инлайн-кнопки подтверждения действий (обновить, удалить и т.д.).
+    Этот обработчик находится вне `ConversationHandler`.
+    """
     query = update.callback_query
-    user_id = query.from_user.id
     await query.answer()
 
+    if not query.message:
+        log.warning("query.message is None in handle_confirmation")
+        return
+
+    user_id = query.from_user.id
     jobs = context.job_queue.get_jobs_by_name(f"confirm_{query.message.chat_id}")
     for job in jobs:
         job.schedule_removal()
 
     action = query.data.split('_', 1)[1]
-    log.debug(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
+    log.info(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
 
     if action == "cancel":
         await query.edit_message_text("Действие отменено.", reply_markup=None)
-        return
-
-    if action == "update":
+    elif action == "update":
         await query.edit_message_text("Начинаю обновление...", reply_markup=None)
         asyncio.create_task(installer.run_update(update, context))
-
     elif action == "uninstall":
         await query.edit_message_text("Начинаю полное удаление...", reply_markup=None)
         asyncio.create_task(installer.run_uninstallation(update, context))
-
     elif action == "restart_services":
         await query.edit_message_text("⏳ Перезапускаю службы...", reply_markup=None)
         report = await service_manager.restart_all_services()
         await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}", reply_markup=None)
-    
     elif action == "restart_bot":
         await query.edit_message_text("⏳ Перезагружаюсь...", reply_markup=None)
-        # Устанавливаем переменную окружения с ID чата для подтверждения
         os.environ['KDW_RESTART_CHAT_ID'] = str(query.message.chat_id)
-        # Даем небольшую задержку, чтобы Telegram успел обработать edit_message_text
         await asyncio.sleep(1)
         os.execv(sys.executable, ['python3'] + sys.argv)
 
-
 @private_access
-async def handle_log_level_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_log_level_selection(update: Update, _context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает нажатия на инлайн-кнопки для смены уровня логирования.
+    Этот обработчик находится вне `ConversationHandler`.
+    """
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
@@ -360,55 +588,44 @@ async def handle_log_level_selection(update: Update, context: ContextTypes.DEFAU
     if new_level == 'cancel':
         log.debug("Отмена смены уровня логирования", extra={'user_id': user_id})
         await query.edit_message_text("Действие отменено.", reply_markup=None)
-        return
+    else:
+        if not config.has_section('logging'):
+            config.add_section('logging')
+        config.set('logging', 'level', new_level)
+        with open(default_config_file, 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
+        set_log_level(new_level, user_id=user_id)
+        await query.edit_message_text(f"✅ Уровень логирования изменен на *{new_level}*.", parse_mode=ParseMode.MARKDOWN, reply_markup=None)
 
-    # Обновляем конфиг
-    if not config.has_section('logging'):
-        config.add_section('logging')
-    config.set('logging', 'level', new_level)
-    with open(default_config_file, 'w', encoding='utf-8') as configfile:
-        config.write(configfile)
-
-    # Применяем на лету
-    set_log_level(new_level, user_id=user_id)
-    
-    await query.edit_message_text(
-        f"✅ Уровень логирования изменен на *{new_level}*.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=None
-    )
-
-# --- Меню логирования ---
 @private_access
-async def menu_logging(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def menu_logging(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню выбора уровня логирования.
+    """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Уровень логов'", extra={'user_id': user_id})
     current_level = logging.getLevelName(log.level)
     
     levels = ['INFO', 'WARNING', 'ERROR', 'DEBUG']
-    keyboard = []
-    row = []
-    for level in levels:
-        button_text = f"• {level} •" if level == current_level else level
-        row.append(InlineKeyboardButton(button_text, callback_data=f"log_{level}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-        
+    keyboard = [
+        [InlineKeyboardButton(f"• {level} •" if level == current_level else level, callback_data=f"log_{level}")]
+        for level in levels
+    ]
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="log_cancel")])
     
     await update.message.reply_text(
-        f"Текущий уровень логирования: *{current_level}*.\n\n"
-        "Выберите новый уровень:",
+        f"Текущий уровень логирования: *{current_level}*.\n\nВыберите новый уровень:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
     return SETTINGS_MENU
 
-# --- Обработчик ошибок ---
+# --- Системные обработчики ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Глобальный обработчик ошибок. Логирует ошибку и отправляет
+    сообщение с трассировкой администратору.
+    """
     log.error("Exception while handling an update:", exc_info=context.error)
     tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
     tb_string = "".join(tb_list)
@@ -420,113 +637,127 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         log.error("Could not parse access_ids or it is empty.")
         return
 
-    message = (
-        "An exception was raised while handling an update\n"
-        f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n"
-        f"<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n\n"
-        f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
-        f"<pre>{html.escape(tb_string)}</pre>"
-    )
+    message = (f"An exception was raised while handling an update\n"
+               f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n"
+               f"<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n\n"
+               f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
+               f"<pre>{html.escape(tb_string)}</pre>")
     await context.bot.send_message(chat_id=admin_id, text=message, parse_mode=ParseMode.HTML)
-
 
 async def post_restart_hook(application: Application):
     """
-    Проверяет, был ли бот перезапущен, и отправляет подтверждение.
+    Функция, выполняемая после перезапуска бота.
+    Отправляет сообщение о успешном перезапуске в чат, из которого он был инициирован.
     """
     restarted_chat_id = os.environ.get('KDW_RESTART_CHAT_ID')
     if restarted_chat_id:
         log.info(f"Бот был перезапущен. Отправка подтверждения в чат {restarted_chat_id}.")
         try:
-            await application.bot.send_message(
-                chat_id=restarted_chat_id,
-                text="✅ Бот успешно перезагружен!"
-            )
+            await application.bot.send_message(chat_id=restarted_chat_id, text="✅ Бот успешно перезагружен!")
         except Exception as e:
             log.error(f"Не удалось отправить подтверждение о перезапуске: {e}")
         finally:
-            # Удаляем переменную, чтобы избежать повторной отправки
             del os.environ['KDW_RESTART_CHAT_ID']
 
-
 def main() -> None:
-    # Создаем объект для сохранения состояния
+    """
+    Основная функция.
+    Настраивает и запускает бота, определяет логику диалогов.
+    """
+    # Настройка персистентности для сохранения состояний между перезапусками
     persistence = PicklePersistence(filepath=persistence_file)
-    
     job_queue = JobQueue()
-    application = (
-        Application.builder()
-        .token(config.get("telegram", "token"))
-        .job_queue(job_queue)
-        .persistence(persistence)
-        .post_init(post_restart_hook) # Добавляем хук после инициализации
-        .build()
-    )
+    
+    application = (Application.builder()
+                   .token(config.get("telegram", "token"))
+                   .persistence(persistence)
+                   .job_queue(job_queue)
+                   .post_init(post_restart_hook)
+                   .build())
 
+    # Основной обработчик диалогов, управляющий навигацией по меню
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
+            # Главное меню
             STATUS: [
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
                 MessageHandler(filters.Regex('^Настройки$'), menu_settings),
             ],
+            # Меню настроек
             SETTINGS_MENU: [
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
                 MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
-                MessageHandler(filters.Regex('^📝 Уровень логирования$'), menu_logging),
+                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
                 MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
                 MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
+            # Меню системы обхода
             BYPASS_MENU: [
                 MessageHandler(filters.Regex('^Ключи$'), menu_keys),
                 MessageHandler(filters.Regex('^Списки$'), menu_lists),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
+            # Меню выбора типа ключа
+            KEY_TYPE_MENU: [
+                MessageHandler(filters.Regex('^(Shadowsocks|Trojan|Vmess)$'), menu_key_type),
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_bypass_system),
+            ],
+            # Меню списка ключей
+            KEY_LIST_MENU: [
+                MessageHandler(filters.Regex('^➕ Добавить$'), ask_for_key_url),
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_keys),
+            ],
+            # Ожидание URL ключа
+            AWAIT_KEY_URL: [
+                MessageHandler(filters.Regex('^Отмена$'), menu_key_list),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_key_url),
+            ],
+            # Меню выбора списка доменов
             LISTS_MENU: [
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_bypass_system),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, select_list_action),
             ],
+            # Меню действий со списком
             SHOW_LIST: [
                 MessageHandler(filters.Regex('^👁️ Показать$'), show_list_content),
                 MessageHandler(filters.Regex('^➕ Добавить$'), ask_for_domains_to_add),
                 MessageHandler(filters.Regex('^➖ Удалить$'), ask_for_domains_to_remove),
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_lists),
             ],
+            # Ожидание доменов для добавления
             ADD_TO_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_domains_to_list),
             ],
+            # Ожидание доменов для удаления
             REMOVE_FROM_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, remove_domains_from_list),
             ],
-            KEYS_MENU: [
-                 MessageHandler(filters.Regex('^Shadowsocks$'), ask_for_shadowsocks_key),
-                 MessageHandler(filters.Regex('^Vmess$'), ask_for_vmess_key),
-                 MessageHandler(filters.Regex('^Trojan$'), ask_for_trojan_key),
-                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_bypass_system),
-            ],
-            AWAIT_SHADOWSOCKS_KEY: [
-                MessageHandler(filters.Regex('^Отмена$'), menu_keys),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_shadowsocks_key),
-            ],
         },
         fallbacks=[CommandHandler('start', start)],
         persistent=True,
-        name="main_conversation"
+        name="main_conversation",
+        per_chat=False,
+        per_user=True,
+        per_message=False,
     )
 
     application.add_handler(conv_handler)
-    # Добавляем обработчики для inline-кнопок
+    
+    # Добавляем обработчики колбэков отдельно от ConversationHandler, чтобы избежать конфликтов состояний
+    application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^key_'))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^confirm_'))
     application.add_handler(CallbackQueryHandler(handle_log_level_selection, pattern='^log_'))
 
+    # Регистрируем глобальный обработчик ошибок
     application.add_error_handler(error_handler)
+
     log.info("KDW Bot запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == '__main__':
     main()

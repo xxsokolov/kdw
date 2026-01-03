@@ -268,7 +268,7 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         is_active = (config_path == active_config)
         filename = os.path.basename(config_path)
         
-        action_button = InlineKeyboardButton("✅ Активен", callback_data="noop") if is_active else InlineKeyboardButton("🚀 Актив.", callback_data=f"key_activate_{key_type}_{filename}")
+        action_button = InlineKeyboardButton("✅ Активен", callback_data="noop") if is_active else InlineKeyboardButton("🚀 Применить", callback_data=f"key_activate_{key_type}_{filename}")
         
         buttons = [
             action_button,
@@ -277,8 +277,6 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         ]
 
         text = f"📄 `{filename}`"
-        if is_active:
-            text = f"✅ *{text}* (активен)"
 
         msg = await update.effective_chat.send_message(
             text=text,
@@ -337,23 +335,24 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Ошибка удаления", show_alert=True)
 
     elif action == 'activate':
-        await query.answer("Активация...")
-        target_link = "/opt/etc/kdw/ss.active.json"
+        await query.answer("Применение...")
+        # Получаем правильный путь к ссылке из ConfigManager
+        target_link = manager.active_config_link
         
         # Создаем/обновляем символическую ссылку
         success, output = await run_shell_command(f"ln -sf {config_path} {target_link}")
         if not success:
             log.error(f"Ошибка создания symlink: {output}")
-            await query.message.reply_text(f"❌ Ошибка активации: не удалось создать символическую ссылку.\n`{output}`", parse_mode=ParseMode.MARKDOWN)
+            await query.message.reply_text(f"❌ Ошибка применения: не удалось создать символическую ссылку.\n`{output}`", parse_mode=ParseMode.MARKDOWN)
             return
 
         # Перезапускаем службу
-        restart_success, restart_output = await service_manager.restart_service("shadowsocks")
+        restart_success, restart_output = await service_manager.restart_service(key_type)
         if not restart_success:
-            log.error(f"Ошибка перезапуска shadowsocks: {restart_output}")
-            await query.message.reply_text(f"⚠️ Конфиг `{filename}` активирован, но службу перезапустить не удалось. Попробуйте вручную.\n`{restart_output}`", parse_mode=ParseMode.MARKDOWN)
+            log.error(f"Ошибка перезапуска {key_type}: {restart_output}")
+            await query.message.reply_text(f"⚠️ Конфиг `{filename}` применен, но службу перезапустить не удалось. Попробуйте вручную.\n`{restart_output}`", parse_mode=ParseMode.MARKDOWN)
         else:
-            await query.message.reply_text(f"🚀 Конфиг `{filename}` активирован и служба перезапущена.", parse_mode=ParseMode.MARKDOWN)
+            await query.message.reply_text(f"🚀 Конфиг `{filename}` применен и служба перезапущена.", parse_mode=ParseMode.MARKDOWN)
         
         # Обновляем список ключей, чтобы показать новый активный
         await menu_key_list(update, context)
@@ -773,6 +772,8 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^key_'))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^confirm_'))
     application.add_handler(CallbackQueryHandler(handle_log_level_selection, pattern='^log_'))
+    application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^noop$'))
+
 
     # Регистрируем глобальный обработчик ошибок
     application.add_error_handler(error_handler)

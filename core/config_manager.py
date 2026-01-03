@@ -2,7 +2,7 @@ import os
 import glob
 import json
 import base64
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from configparser import ConfigParser
 
 from core.log_utils import log
@@ -17,15 +17,15 @@ class ConfigManager:
         # Читаем основной конфиг для получения путей
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_file = os.path.join(script_dir, '..', 'kdw.cfg')
-        config = ConfigParser()
-        config.read(config_file)
+        self.config = ConfigParser()
+        self.config.read(config_file)
 
         # Путь к директории с конфигами конкретного сервиса
-        self.path = config.get(service_name, 'path', fallback=f'/opt/etc/{service_name}')
+        self.path = self.config.get(service_name, 'path', fallback=f'/opt/etc/{service_name}')
         
         # Путь к нашей централизованной символической ссылке
-        # Имя сервиса используется для формирования уникального имени ссылки, например, ss.active.json
-        self.active_config_link = f"/opt/etc/kdw/{service_name[:2]}.active.json"
+        link_prefix = 'ss' if self.service_name == 'shadowsocks' else self.service_name[:2]
+        self.active_config_link = f"/opt/etc/kdw/{link_prefix}.active.json"
         
         if not os.path.exists(self.path):
             os.makedirs(self.path)
@@ -103,23 +103,41 @@ class ConfigManager:
     def _create_shadowsocks_from_url(self, url: str) -> str | None:
         """Парсит ss:// URL и создает конфиг."""
         try:
-            # Базовая валидация
             if not url.startswith('ss://'):
+                log.error("URL не начинается с ss://")
                 return None
 
-            parts = urlparse(url)
+            main_part = url[5:].split('#', 1)[0]
             
-            # Имя файла будет основано на имени хоста и порта
-            filename = f"{parts.hostname}_{parts.port}.json"
+            try:
+                user_info_encoded, server_info = main_part.split('@', 1)
+            except ValueError:
+                log.error(f"Неверный формат URL: отсутствует символ '@'. URL: {url}")
+                return None
+
+            try:
+                padding = '=' * (4 - len(user_info_encoded) % 4)
+                user_info_decoded = base64.urlsafe_b64decode(user_info_encoded + padding).decode('utf-8')
+                method, password = user_info_decoded.split(':', 1)
+            except Exception as e:
+                log.error(f"Ошибка декодирования Base64 или разделения method:password: {e}")
+                return None
+
+            try:
+                server, port = server_info.split(':', 1)
+            except ValueError:
+                log.error(f"Неверный формат server:port: {server_info}")
+                return None
+
+            filename = f"{server}_{port}.json"
             filepath = os.path.join(self.path, filename)
             
-            # Декодирование информации из URL
-            user_info = base64.urlsafe_b64decode(parts.username + '==').decode('utf-8')
-            method, password = user_info.split(':', 1)
-            
+            local_port = self.config.getint('shadowsocks', 'local_port', fallback=1080)
+
             sh_config = {
-                "server": parts.hostname,
-                "server_port": parts.port,
+                "server": server,
+                "server_port": int(port),
+                "local_port": local_port,
                 "method": method,
                 "password": password,
                 "timeout": 600,
@@ -133,5 +151,5 @@ class ConfigManager:
             log.info(f"Создан новый конфиг Shadowsocks: {filepath}")
             return filepath
         except Exception as e:
-            log.error(f"Ошибка парсинга Shadowsocks URL: {e}")
+            log.error(f"Общая ошибка парсинга Shadowsocks URL: {e}")
             return None

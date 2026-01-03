@@ -1,7 +1,7 @@
 import os
 import glob
 from typing import List, Tuple
-from .shell_utils import run_command
+from .shell_utils import run_shell_command
 
 # Путь к директории со списками и скрипту обновления
 LISTS_DIR = "/opt/etc/unblock"
@@ -99,8 +99,8 @@ class ListManager:
         if not os.path.exists(UPDATE_SCRIPT):
             return False, "Скрипт обновления не найден."
 
-        code, stdout, stderr = await run_command(UPDATE_SCRIPT)
-        if code == 0:
+        success, output = await run_shell_command(UPDATE_SCRIPT)
+        if success:
             return True, "Списки успешно обновлены."
         else:
-            return False, f"Ошибка обновления списков:\n{stdout}\n{stderr}"
+            return False, f"Ошибка обновления списков:\n{output}"

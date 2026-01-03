@@ -20,8 +20,12 @@ class ConfigManager:
         config = ConfigParser()
         config.read(config_file)
 
+        # Путь к директории с конфигами конкретного сервиса
         self.path = config.get(service_name, 'path', fallback=f'/opt/etc/{service_name}')
-        self.active_config_link = os.path.join(self.path, 'active_config.json')
+        
+        # Путь к нашей централизованной символической ссылке
+        # Имя сервиса используется для формирования уникального имени ссылки, например, ss.active.json
+        self.active_config_link = f"/opt/etc/kdw/{service_name[:2]}.active.json"
         
         if not os.path.exists(self.path):
             os.makedirs(self.path)
@@ -31,24 +35,36 @@ class ConfigManager:
         return glob.glob(os.path.join(self.path, '*.json'))
 
     def get_active_config(self) -> str | None:
-        """Возвращает путь к активному конфигу или None."""
+        """
+        Возвращает реальный путь к активному конфигу, читая символическую ссылку.
+        """
         if os.path.islink(self.active_config_link):
-            return os.path.realpath(self.active_config_link)
+            try:
+                return os.path.realpath(self.active_config_link)
+            except Exception as e:
+                log.error(f"Ошибка чтения символической ссылки {self.active_config_link}: {e}")
         return None
 
     def set_active_config(self, config_path: str) -> bool:
-        """Устанавливает выбранный конфиг как активный, создавая символическую ссылку."""
+        """
+        Устанавливает выбранный конфиг как активный.
+        В боте эта логика выполняется напрямую через shell_utils.run_shell_command,
+        но этот метод оставлен для консистентности и возможного использования в будущем.
+        """
         if not os.path.exists(config_path):
             log.error(f"Конфиг {config_path} не найден.")
             return False
-        
-        # Удаляем старую ссылку, если она есть
-        if os.path.exists(self.active_config_link):
-            os.remove(self.active_config_link)
+        try:
+            # Удаляем старую ссылку, если она есть
+            if os.path.lexists(self.active_config_link):
+                os.remove(self.active_config_link)
             
-        os.symlink(config_path, self.active_config_link)
-        log.info(f"Активным установлен конфиг: {config_path}")
-        return True
+            os.symlink(config_path, self.active_config_link)
+            log.info(f"Активным установлен конфиг: {config_path}")
+            return True
+        except Exception as e:
+            log.error(f"Ошибка создания символической ссылки: {e}")
+            return False
 
     def read_config(self, config_path: str) -> dict | None:
         """Читает и возвращает содержимое JSON-конфига."""

@@ -37,6 +37,7 @@ from core.installer import Installer
 from core.service_manager import ServiceManager
 from core.list_manager import ListManager
 from core.config_manager import ConfigManager
+from core.shell_utils import run_shell_command
 
 # --- Глобальные переменные и константы ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -267,12 +268,13 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         is_active = (config_path == active_config)
         filename = os.path.basename(config_path)
         
+        action_button = InlineKeyboardButton("✅ Активен", callback_data="noop") if is_active else InlineKeyboardButton("🚀 Актив.", callback_data=f"key_activate_{key_type}_{filename}")
+        
         buttons = [
+            action_button,
             InlineKeyboardButton("👁️ Показать", callback_data=f"key_view_{key_type}_{filename}"),
             InlineKeyboardButton("🗑️ Удалить", callback_data=f"key_delete_{key_type}_{filename}"),
         ]
-        if not is_active:
-            buttons.insert(0, InlineKeyboardButton("🚀 Актив.", callback_data=f"key_activate_{key_type}_{filename}"))
 
         text = f"📄 `{filename}`"
         if is_active:
@@ -294,6 +296,11 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Этот обработчик находится вне `ConversationHandler`.
     """
     query = update.callback_query
+    
+    if query.data == "noop":
+        await query.answer("Этот конфиг уже активен.")
+        return
+
     await query.answer()
 
     if not query.message:
@@ -330,12 +337,26 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Ошибка удаления", show_alert=True)
 
     elif action == 'activate':
-        if manager.set_active_config(config_path):
-            await query.message.reply_text(f"🚀 Конфиг `{filename}` активирован. Перезапустите службу, чтобы применить.", parse_mode=ParseMode.MARKDOWN)
-            # Поскольку обработчик вне диалога, обновляем список вручную
-            await menu_key_list(update, context)
+        await query.answer("Активация...")
+        target_link = "/opt/etc/kdw/ss.active.json"
+        
+        # Создаем/обновляем символическую ссылку
+        success, output = await run_shell_command(f"ln -sf {config_path} {target_link}")
+        if not success:
+            log.error(f"Ошибка создания symlink: {output}")
+            await query.message.reply_text(f"❌ Ошибка активации: не удалось создать символическую ссылку.\n`{output}`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Перезапускаем службу
+        restart_success, restart_output = await service_manager.restart_service("shadowsocks")
+        if not restart_success:
+            log.error(f"Ошибка перезапуска shadowsocks: {restart_output}")
+            await query.message.reply_text(f"⚠️ Конфиг `{filename}` активирован, но службу перезапустить не удалось. Попробуйте вручную.\n`{restart_output}`", parse_mode=ParseMode.MARKDOWN)
         else:
-            await query.answer("❌ Ошибка активации", show_alert=True)
+            await query.message.reply_text(f"🚀 Конфиг `{filename}` активирован и служба перезапущена.", parse_mode=ParseMode.MARKDOWN)
+        
+        # Обновляем список ключей, чтобы показать новый активный
+        await menu_key_list(update, context)
 
 @private_access
 async def ask_for_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

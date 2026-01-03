@@ -24,7 +24,7 @@ CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
-PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir trojan v2ray-core tor tor-geoip"
+PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir trojan v2ray-core tor tor-geoip start-stop-daemon"
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="
@@ -94,7 +94,11 @@ manage_services() {
                 rm -f "$file"
             else
                 echo "  - $(basename "$file") $action"
-                "$file" "$action" >/dev/null 2>&1
+                if [ "$name" = "kdwbot" ]; then
+                    "$file" "$action" # Не перенаправляем вывод, чтобы видеть ошибки
+                else
+                    "$file" "$action" >/dev/null 2>&1
+                fi
                 [ "$action" = "start" ] && sleep 1
             fi
         fi
@@ -174,8 +178,19 @@ do_install() {
         if [ -f "$svc_file" ]; then
             chmod +x "$svc_file"
             add_m "file:$svc_file"
-            # Перевод Shadowsocks из режима клиента (local) в режим прозрачного прокси (redir)
-            [ "$svc" = "shadowsocks" ] && sed -i 's/ss-local/ss-redir/g' "$svc_file"
+
+            # --- Патч для Shadowsocks ---
+            if [ "$svc" = "shadowsocks" ]; then
+                # 1. Гарантируем, что используется ss-redir
+                sed -i 's/ss-local/ss-redir/g' "$svc_file"
+
+                # 2. Проверяем и исправляем путь к конфигу, если он стандартный
+                SS_CUSTOM_CONF="${INSTALL_DIR}/ss.active.json"
+                if ! grep -q "$SS_CUSTOM_CONF" "$svc_file"; then
+                    echo "  -> Применяем патч к службе shadowsocks для поддержки динамического конфига..."
+                    sed -i "s|/opt/etc/shadowsocks.json|$SS_CUSTOM_CONF|g" "$svc_file"
+                fi
+            fi
         fi
     done
 
@@ -214,75 +229,111 @@ EOF
 
     # Создание службы автозапуска S99kdwbot
     SERVICE_FILE="/opt/etc/init.d/S99kdwbot"
-    cat > "$SERVICE_FILE" << EOF
+    cat > "$SERVICE_FILE" << 'EOF'
 #!/bin/sh
-# KDW Bot Service (Entware)
+# KDW Bot Service (Entware Optimized 2026)
 
-NAME="KDW Bot"
-BOT_PATH="${INSTALL_DIR}/kdw_bot.py"
-PYTHON_EXEC="${VENV_DIR}/bin/python"
-PID_FILE="/var/run/kdw_bot.pid"
+NAME="service_kdw_bot"
+DESC="KDW Telegram Bot"
+BOT_ROOT="/opt/etc/kdw"
+BOT_PATH="$BOT_ROOT/kdw_bot.py"
+PYTHON_EXEC="$BOT_ROOT/venv/bin/python"
+PID_FILE="/var/run/${NAME}.pid"
 
-# ANSI Color Codes
+# Цвета для терминала
 C_GREEN='\033[0;32m'
 C_RED='\033[0;31m'
+C_YELLOW='\033[1;33m'
 C_RESET='\033[0m'
 
-is_running() {
-    [ -f "\$PID_FILE" ] && ps | grep -q "^\s*\$(cat \$PID_FILE)\s"
+check_env() {
+    if [ ! -f "$BOT_PATH" ]; then
+        echo -e "[${C_RED}ERROR${C_RESET}] Файл бота не найден: $BOT_PATH"
+        exit 1
+    fi
+    if [ ! -x "$PYTHON_EXEC" ]; then
+        echo -e "[${C_RED}ERROR${C_RESET}] Python venv не найден или не активен: $PYTHON_EXEC"
+        exit 1
+    fi
 }
 
 start() {
-    echo -n "Starting \$NAME... "
-    if is_running; then
-        echo -e "[${C_RED}FAILED${C_RESET}] (already running)"
-        logger -p user.err "\$NAME start failed: already running"
-        return 1
+    check_env
+    echo -n "Starting $DESC: "
+
+    # Проверка на дубликат
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        echo -e "[${C_YELLOW}ALREADY RUNNING${C_RESET}]"
+        return 0
     fi
 
-    \$PYTHON_EXEC \$BOT_PATH >/dev/null 2>&1 &
-    echo \$! > \$PID_FILE
-    sleep 1
+    # Запуск: -S (start), -b (background), -m (make pidfile)
+    # Перенаправляем вывод демона в /dev/null, чтобы сохранить строку чистой
+    start-stop-daemon -S -b -m -p "$PID_FILE" -x "$PYTHON_EXEC" -- "$BOT_PATH" >/dev/null 2>&1
 
-    if is_running; then
+    if [ $? -eq 0 ]; then
         echo -e "[${C_GREEN}OK${C_RESET}]"
-        logger "\$NAME start: ok"
+        logger -t "$NAME" "Service started successfully"
     else
-        echo -e "[${C_RED}FAILED${C_RESET}] (process not found after start)"
-        logger -p user.err "\$NAME start failed: process not found after start"
-        rm -f \$PID_FILE
-        return 1
+        echo -e "[${C_RED}FAILED${C_RESET}]"
     fi
 }
 
 stop() {
-    echo -n "Stopping \$NAME... "
-    if ! is_running; then
-        echo -e "[${C_GREEN}OK${C_RESET}] (already stopped)"
-        logger "\$NAME stop: ok (already stopped)"
+    echo -n "Stopping $DESC: "
+    if [ ! -f "$PID_FILE" ]; then
+        echo -e "[${C_GREEN}OK${C_RESET}] (not running)"
         return 0
     fi
 
-    kill \$(cat \$PID_FILE)
-    rm -f \$PID_FILE
+    PID=$(cat "$PID_FILE")
+
+    # Посылаем сигнал завершения (TERM)
+    start-stop-daemon -K -s TERM -p "$PID_FILE" >/dev/null 2>&1
+
+    # Имитируем --retry (ждем до 5 секунд)
+    RETRIES=5
+    while [ $RETRIES -gt 0 ]; do
+        if ! kill -0 "$PID" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        RETRIES=$((RETRIES - 1))
+    done
+
+    # Если процесс не сдается — убиваем принудительно
+    if kill -0 "$PID" 2>/dev/null; then
+        echo -ne "${C_YELLOW}Forcing...${C_RESET} "
+        start-stop-daemon -K -s KILL -p "$PID_FILE" >/dev/null 2>&1
+    fi
+
+    rm -f "$PID_FILE"
     echo -e "[${C_GREEN}OK${C_RESET}]"
-    logger "\$NAME stop: ok"
+    logger -t "$NAME" "Service stopped"
 }
 
 status() {
-    if is_running; then
-        echo -e "\$NAME is ${C_GREEN}running${C_RESET}."
-    else
-        echo -e "\$NAME is ${C_RED}stopped${C_RESET}."
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo -e "$DESC is ${C_GREEN}running${C_RESET} (PID: $PID)"
+            return 0
+        fi
     fi
+    echo -e "$DESC is ${C_RED}stopped${C_RESET}"
+    return 3
 }
 
-case "\$1" in
+case "$1" in
     start) start ;;
     stop) stop ;;
-    restart) \$0 stop; sleep 2; \$0 start ;;
+    restart)
+        stop
+        sleep 1
+        start
+        ;;
     status) status ;;
-    *) echo "Usage: \$0 {start|stop|restart|status}" >&2; exit 1 ;;
+    *) echo "Usage: $0 {start|stop|restart|status}" >&2; exit 1 ;;
 esac
 EOF
     chmod +x "$SERVICE_FILE"

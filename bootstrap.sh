@@ -24,7 +24,7 @@ CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
-PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir trojan v2ray-core tor tor-geoip start-stop-daemon"
+PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip start-stop-daemon"
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="
@@ -179,20 +179,37 @@ do_install() {
             chmod +x "$svc_file"
             add_m "file:$svc_file"
 
-            # --- Патч для Shadowsocks ---
             if [ "$svc" = "shadowsocks" ]; then
-                # 1. Гарантируем, что используется ss-redir
                 sed -i 's/ss-local/ss-redir/g' "$svc_file"
-
-                # 2. Проверяем и исправляем путь к конфигу, если он стандартный
-                SS_CUSTOM_CONF="${INSTALL_DIR}/ss.active.json"
-                if ! grep -q "$SS_CUSTOM_CONF" "$svc_file"; then
-                    echo "  -> Применяем патч к службе shadowsocks для поддержки динамического конфига..."
-                    sed -i "s|/opt/etc/shadowsocks.json|$SS_CUSTOM_CONF|g" "$svc_file"
+                CUSTOM_CONF="${INSTALL_DIR}/ss.active.json"
+                if ! grep -q "$CUSTOM_CONF" "$svc_file"; then
+                    echo "  -> Применяем патч к службе $svc..."
+                    sed -i "s|/opt/etc/shadowsocks.json|$CUSTOM_CONF|g" "$svc_file"
                 fi
             fi
         fi
     done
+
+    # Создаем правильный сервисный файл для Trojan, если его нет или он - пустышка
+    TROJAN_SVC_FILE=$(find_svc "trojan")
+    if [ ! -f "$TROJAN_SVC_FILE" ] || ! grep -q "start-stop-daemon" "$TROJAN_SVC_FILE"; then
+        echo "  -> Создаем/обновляем сервисный файл для Trojan..."
+        [ -f "$TROJAN_SVC_FILE" ] && rm -f "$TROJAN_SVC_FILE"
+        NEW_TROJAN_SVC="/opt/etc/init.d/S22trojan"
+        cat > "$NEW_TROJAN_SVC" << 'EOF'
+#!/bin/sh
+ENABLED=yes
+PROCS=trojan
+ARGS="-c /opt/etc/kdw/tr.active.json"
+PREARGS=""
+DESC=$PROCS
+PATH=/opt/sbin:/opt/bin:/opt/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+. /opt/etc/init.d/rc.func
+EOF
+        chmod +x "$NEW_TROJAN_SVC"
+        add_m "file:$NEW_TROJAN_SVC"
+    fi
+
 
     # Исправление модуля venv (в Entware 2025 venv вырезан из python3-light)
     if ! python3 -m venv --help >/dev/null 2>&1; then
@@ -233,7 +250,7 @@ EOF
 #!/bin/sh
 # KDW Bot Service (Entware Optimized 2026)
 
-NAME="service_kdw_bot"
+NAME="kdw_bot"
 DESC="KDW Telegram Bot"
 BOT_ROOT="/opt/etc/kdw"
 BOT_PATH="$BOT_ROOT/kdw_bot.py"

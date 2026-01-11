@@ -2,7 +2,7 @@ import os
 import glob
 import json
 import base64
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 from configparser import ConfigParser
 
 from core.log_utils import log
@@ -91,17 +91,18 @@ class ConfigManager:
 
     def create_from_url(self, url: str) -> str | None:
         """
-        Парсит URL, создает и сохраняет новый конфиг.
-        Возвращает путь к созданному файлу или None в случае ошибки.
+        Парсит URL, создает или обновляет конфиг.
+        Возвращает статус: "created", "updated", "skipped" или None.
         """
         if self.service_name == 'shadowsocks':
             return self._create_shadowsocks_from_url(url)
-        # Здесь можно будет добавить поддержку других типов
+        if self.service_name == 'trojan':
+            return self._create_trojan_from_url(url)
         log.error(f"Создание из URL для '{self.service_name}' не поддерживается.")
         return None
 
     def _create_shadowsocks_from_url(self, url: str) -> str | None:
-        """Парсит ss:// URL и создает конфиг."""
+        """Парсит ss:// URL и создает/обновляет конфиг."""
         try:
             if not url.startswith('ss://'):
                 log.error("URL не начинается с ss://")
@@ -134,7 +135,7 @@ class ConfigManager:
             
             local_port = self.config.getint('shadowsocks', 'local_port', fallback=1080)
 
-            sh_config = {
+            new_config = {
                 "server": server,
                 "server_port": int(port),
                 "local_port": local_port,
@@ -145,11 +146,71 @@ class ConfigManager:
                 "mode": "tcp_and_udp"
             }
             
-            with open(filepath, 'w') as f:
-                json.dump(sh_config, f, indent=4)
-            
-            log.info(f"Создан новый конфиг Shadowsocks: {filepath}")
-            return filepath
+            if os.path.exists(filepath):
+                existing_config = self.read_config(filepath)
+                if existing_config == new_config:
+                    return "skipped"
+                
+                with open(filepath, 'w') as f:
+                    json.dump(new_config, f, indent=4)
+                log.info(f"Обновлен конфиг Shadowsocks: {filepath}")
+                return "updated"
+            else:
+                with open(filepath, 'w') as f:
+                    json.dump(new_config, f, indent=4)
+                log.info(f"Создан новый конфиг Shadowsocks: {filepath}")
+                return "created"
+
         except Exception as e:
             log.error(f"Общая ошибка парсинга Shadowsocks URL: {e}")
+            return None
+
+    def _create_trojan_from_url(self, url: str) -> str | None:
+        """Парсит trojan:// URL и создает/обновляет конфиг."""
+        try:
+            if not url.startswith('trojan://'):
+                return None
+
+            parts = urlparse(url)
+            password = parts.username
+            server = parts.hostname
+            port = parts.port
+            
+            params = parse_qs(parts.query)
+            sni = params.get('sni', [server])[0]
+            
+            filename = f"{server}_{port}.json"
+            filepath = os.path.join(self.path, filename)
+
+            local_port = self.config.getint('trojan', 'local_port', fallback=1081)
+
+            new_config = {
+                "run_type": "client",
+                "local_addr": "127.0.0.1",
+                "local_port": local_port,
+                "remote_addr": server,
+                "remote_port": port,
+                "password": [password],
+                "ssl": {
+                    "sni": sni
+                }
+            }
+
+            if os.path.exists(filepath):
+                existing_config = self.read_config(filepath)
+                if existing_config == new_config:
+                    return "skipped"
+                
+                with open(filepath, 'w') as f:
+                    json.dump(new_config, f, indent=4)
+                log.info(f"Обновлен конфиг Trojan: {filepath}")
+                return "updated"
+            else:
+                with open(filepath, 'w') as f:
+                    json.dump(new_config, f, indent=4)
+                log.info(f"Создан новый конфиг Trojan: {filepath}")
+                return "created"
+
+        except Exception as e:
+            log.error(f"Ошибка парсинга Trojan URL: {e}")
             return None

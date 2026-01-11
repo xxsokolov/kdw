@@ -12,6 +12,7 @@ import os
 import json
 import html
 import traceback
+import re
 from configparser import ConfigParser
 from ast import literal_eval
 from functools import wraps
@@ -83,7 +84,7 @@ settings_keyboard = [
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
-key_list_keyboard = [["➕ Добавить"], ["🔙 Назад"]]
+key_list_keyboard = [["🚦 Диагностика"], ["➕ Добавить"], ["🔙 Назад"]]
 cancel_keyboard = [["Отмена"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
 
@@ -236,11 +237,6 @@ async def menu_key_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     log.debug(f"Выбран тип ключа: {key_type}", extra={'user_id': user_id})
     context.user_data['key_type'] = key_type
     
-    if key_type in ['trojan', 'vmess']:
-        log.warning(f"Вызвана нереализованная функция для '{key_type}'", extra={'user_id': user_id})
-        await update.message.reply_text(f"Управление ключами типа '{key_type}' еще не реализовано.", reply_markup=ReplyKeyboardMarkup(key_types_keyboard, resize_keyboard=True))
-        return KEY_TYPE_MENU
-
     await menu_key_list(update, context)
     return KEY_LIST_MENU
 
@@ -365,32 +361,59 @@ async def ask_for_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     key_type = context.user_data['key_type']
     log.debug(f"Запрошено добавление ключа типа '{key_type}'", extra={'user_id': user_id})
+    
+    url_example = f"`{key_type}://...`"
+    
     await update.message.reply_text(
-        f"Отправьте URL ключа (например, ss://...)",
-        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+        f"Отправьте сообщение с одним или несколькими ключами.\n"
+        f"Поддерживаемый формат: {url_example}",
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True),
+        parse_mode=ParseMode.MARKDOWN
     )
     return AWAIT_KEY_URL
 
 @private_access
 async def handle_new_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Обрабатывает полученный URL, создает из него файл конфигурации
+    Находит в тексте все URL ключей, создает из них файлы конфигурации
     и обновляет список ключей.
     """
     user_id = update.effective_user.id
-    url = update.message.text
+    text = update.message.text
     key_type = context.user_data['key_type']
     manager = ConfigManager(key_type)
 
-    log.info(f"Получен URL для создания ключа типа '{key_type}'", extra={'user_id': user_id})
+    # Ищем все ссылки соответствующего типа в тексте
+    url_pattern = rf'{key_type}://[^\s]+'
+    urls = re.findall(url_pattern, text)
     
-    filepath = manager.create_from_url(url)
+    if not urls:
+        await update.message.reply_text(f"Не найдено ни одной ссылки формата `{key_type}://...` в вашем сообщении.", parse_mode=ParseMode.MARKDOWN)
+        return AWAIT_KEY_URL
+
+    log.info(f"Найдено {len(urls)} URL для создания ключей типа '{key_type}'", extra={'user_id': user_id})
     
-    if filepath:
-        filename = os.path.basename(filepath)
-        await update.message.reply_text(f"✅ Конфиг `{filename}` успешно создан.", parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.message.reply_text("❌ Не удалось создать конфиг. Проверьте формат URL.")
+    results = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    
+    for url in urls:
+        status = manager.create_from_url(url)
+        if status in results:
+            results[status] += 1
+        else:
+            results["failed"] += 1
+            log.warning(f"Не удалось создать конфиг из URL: {url}")
+
+    report = []
+    if results["created"] > 0:
+        report.append(f"✅ Создано: {results['created']} шт.")
+    if results["updated"] > 0:
+        report.append(f"🔄 Обновлено: {results['updated']} шт.")
+    if results["skipped"] > 0:
+        report.append(f"🤷 Пропущено (без изменений): {results['skipped']} шт.")
+    if results["failed"] > 0:
+        report.append(f"❌ Не удалось добавить: {results['failed']} шт. (проверьте формат ссылок)")
+        
+    await update.message.reply_text("\n".join(report) if report else "Не найдено новых или измененных ключей.")
         
     await menu_key_list(update, context)
     return KEY_LIST_MENU
@@ -499,6 +522,50 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(f"Выбран список: *{list_name}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
 
+# --- Диагностика ---
+@private_access
+async def run_diagnose_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Запускает диагностику для выбранного типа прокси и отправляет отчет.
+    """
+    proxy_type = context.user_data.get('key_type')
+    if not proxy_type:
+        await update.message.reply_text("Не выбран тип ключа. Вернитесь в меню 'Ключи'.")
+        return KEY_TYPE_MENU
+
+    message = await update.message.reply_text(f"🚦 Выполняю диагностику всех {proxy_type}-соединений...")
+    
+    results = await service_manager.diagnose_all_proxies(proxy_type)
+    
+    if not results or "error" in results[0]:
+        error_msg = results[0]['error'] if results else "Неизвестная ошибка"
+        await message.edit_text(f"❌ Ошибка диагностики: {error_msg}")
+        return KEY_LIST_MENU
+
+    report_lines = [f"🚦 Диагностика всех {proxy_type}-соединений:"]
+    for res in results:
+        server = res.get("server", "N/A")
+        ping = res.get("ping", "❌")
+        latency = res.get("latency", "❌")
+        speed = res.get("speed", "❌")
+        is_active = res.get("is_active", False)
+        
+        line = f"\n▶️ {server}"
+        if is_active:
+            line += " (Активен)"
+        
+        line += f"\n   Пинг: {ping}"
+        
+        if latency == "❌":
+            line += f" | Прокси: ❌ ({res.get('latency_details', 'ошибка')})"
+        else:
+            line += f" | Задержка: {latency} | Скорость: {speed}"
+            
+        report_lines.append(line)
+
+    await message.edit_text("\n".join(report_lines))
+    return KEY_LIST_MENU
+
 # --- Обработчики меню настроек ---
 @private_access
 async def menu_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -589,9 +656,8 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}", reply_markup=None)
     elif action == "restart_bot":
         await query.edit_message_text("⏳ Перезагружаюсь...", reply_markup=None)
-        os.environ['KDW_RESTART_CHAT_ID'] = str(query.message.chat_id)
-        await asyncio.sleep(1)
-        os.execv(sys.executable, ['python3'] + sys.argv)
+        python_executable = os.path.join(sys.prefix, 'bin', 'python')
+        os.execv(python_executable, [python_executable] + sys.argv)
 
 @private_access
 async def handle_log_level_selection(update: Update, _context: ContextTypes.DEFAULT_TYPE):
@@ -706,12 +772,12 @@ def main() -> None:
             ],
             # Меню настроек
             SETTINGS_MENU: [
+                MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
+                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
+                MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
+                MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
-                MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
-                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
-                MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
-                MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
             ],
             # Меню системы обхода
@@ -727,6 +793,7 @@ def main() -> None:
             ],
             # Меню списка ключей
             KEY_LIST_MENU: [
+                MessageHandler(filters.Regex('^🚦 Диагностика$'), run_diagnose_proxy),
                 MessageHandler(filters.Regex('^➕ Добавить$'), ask_for_key_url),
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_keys),
             ],

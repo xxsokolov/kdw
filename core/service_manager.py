@@ -2,6 +2,7 @@ import asyncio
 import glob
 import os
 import re
+import statistics
 from typing import Dict, Any, List
 
 from core.log_utils import log as logger
@@ -54,8 +55,8 @@ class ServiceManager:
         report = [f"{name}: {status}" for name, status in zip(self.service_map.keys(), statuses)]
         return "\n".join(report)
 
-    async def restart_service(self, service_name: str) -> (bool, str):
-        """Перезапускает одну службу."""
+    async def _control_service(self, service_name: str, command: str) -> (bool, str):
+        """Внутренняя функция для вызова start/stop/restart."""
         service_key = service_name.lower()
         pattern = None
         for key, p in self.service_map.items():
@@ -70,15 +71,24 @@ class ServiceManager:
         if not script_path:
             return True, f"{service_name}: ❓ не найден"
 
-        logger.info(f"Перезапуск службы: {script_path}")
-        success, output = await run_shell_command(f'sh -c "{script_path} restart"')
+        logger.info(f"Выполнение '{command}' для службы: {script_path}")
+        success, output = await run_shell_command(f'sh -c "{script_path} {command}"')
 
         if success:
-            logger.info(f"Служба {service_name} успешно перезапущена.")
-            return True, f"{service_name}: ✅ перезапущена"
+            logger.info(f"Служба {service_name} успешно {command}.")
+            return True, f"{service_name}: ✅ {command}"
         else:
-            logger.error(f"Ошибка при перезапуске {service_name}: {output}")
+            logger.error(f"Ошибка при {command} {service_name}: {output}")
             return False, f"{service_name}: ❌ ошибка\n`{output}`"
+
+    async def start_service(self, service_name: str) -> (bool, str):
+        return await self._control_service(service_name, "start")
+
+    async def stop_service(self, service_name: str) -> (bool, str):
+        return await self._control_service(service_name, "stop")
+
+    async def restart_service(self, service_name: str) -> (bool, str):
+        return await self._control_service(service_name, "restart")
 
     async def restart_all_services(self) -> str:
         """Перезапускает все известные службы и возвращает отчет."""
@@ -88,66 +98,71 @@ class ServiceManager:
         report = [message for _, message in results if "не найден" not in message]
         return "\n".join(report) if report else "Не найдено активных служб для перезапуска."
 
-    async def diagnose_all_proxies(self, service_name: str) -> List[Dict[str, Any]]:
-        """
-        Выполняет диагностику всех конфигов для указанного сервиса.
-        """
-        manager = ConfigManager(service_name)
-        all_configs = manager.get_configs()
-        active_config_path = manager.get_active_config()
-
-        if not all_configs:
-            return [{"error": f"Конфигурации для {service_name} не найдены."}]
-
-        results = []
-        for config_path in all_configs:
-            result = await self._diagnose_single_proxy(service_name, config_path, active_config_path)
-            results.append(result)
+    async def get_direct_ping(self, host: str) -> str:
+        """Выполняет быстрый пинг до хоста и возвращает среднее время."""
+        if not host: return "⚠️"
+        success, output = await run_shell_command(f"ping -c 3 -W 2 {host}")
+        if not success:
+            return "❌"
         
-        return results
+        match = re.search(r"round-trip min/avg/max(?:/stddev)? = [\d.]+/([\d.]+)/", output)
+        if match:
+            return f"{float(match.group(1)):.0f} мс"
+        
+        match = re.search(r"min/avg/max = [\d.]+/([\d.]+)/", output)
+        if match:
+            return f"{float(match.group(1)):.0f} мс"
+            
+        return "⚠️"
 
-    async def _diagnose_single_proxy(self, service_name: str, config_path: str, active_config_path: str) -> Dict[str, Any]:
+    async def diagnose_full_proxy(self, service_name: str, config_path: str) -> Dict[str, Any]:
         """Выполняет полную диагностику одного прокси-конфига."""
         manager = ConfigManager(service_name)
         config = manager.read_config(config_path)
         if not config:
             return {"error": f"Не удалось прочитать конфиг: {os.path.basename(config_path)}"}
 
-        server_host = config.get("remote_addr") if service_name == 'trojan' else config.get("server")
-        is_active = (config_path == active_config_path)
-
-        ping_result, ping_details = await self._test_direct_ping(server_host)
+        server_host = config.get("server") or config.get("remote_addr")
         
+        ping_result, jitter_result, _ = await self._test_direct_ping(server_host)
+        
+        details = "не поддерживается"
+        latency_result, proxy_jitter_result, speed_result = "🤷‍♂️", "🤷‍♂️", "🤷‍♂️"
+
         if service_name == 'shadowsocks':
-            latency_result, latency_details, speed_result, speed_details = await self._test_shadowsocks_proxy(config_path)
+            latency_result, proxy_jitter_result, speed_result, details = await self._test_shadowsocks_proxy(config_path)
         elif service_name == 'trojan':
-            latency_result, latency_details, speed_result, speed_details = await self._test_trojan_proxy(config_path)
-        else:
-            latency_result, latency_details, speed_result, speed_details = "🤷‍♂️", "не поддерживается", "🤷‍♂️", "не поддерживается"
+            await self.stop_service('trojan')
+            try:
+                latency_result, proxy_jitter_result, speed_result, details = await self._test_trojan_proxy(config_path)
+            finally:
+                await self.start_service('trojan')
 
         return {
-            "name": os.path.basename(config_path),
-            "server": server_host,
-            "is_active": is_active,
             "ping": ping_result,
-            "ping_details": ping_details,
+            "jitter": jitter_result,
             "latency": latency_result,
-            "latency_details": latency_details,
+            "proxy_jitter": proxy_jitter_result,
             "speed": speed_result,
-            "speed_details": speed_details,
+            "details": details,
+            "server": server_host,
         }
 
-    async def _test_direct_ping(self, host: str) -> (str, str):
-        """Тест 1: Пинг до хоста прокси-сервера напрямую."""
-        if not host: return "⚠️", "Хост не указан"
-        success, output = await run_shell_command(f"ping -c 3 -W 2 {host}")
+    async def _test_direct_ping(self, host: str) -> (str, str, str):
+        """Тест 1: Пинг до хоста прокси-сервера напрямую, измеряет avg и mdev (jitter)."""
+        if not host: return "⚠️", "⚠️", "Хост не указан"
+        success, output = await run_shell_command(f"ping -c 5 -W 2 {host}")
         if not success:
-            return "❌", "Хост недоступен"
+            return "❌", "❌", "Хост недоступен"
         
-        match = re.search(r"min/avg/max = [\d.]+/([\d.]+)/[\d.]+", output)
+        match = re.search(r"round-trip min/avg/max(?:/stddev|/mdev)? = [\d.]+/([\d.]+)/[\d.]+(?:/([\d.]+))?", output)
         if match:
-            return f"{float(match.group(1)):.0f} мс", "Успешно"
-        return "⚠️", "Не удалось определить время"
+            avg = f"{float(match.group(1)):.0f} мс"
+            mdev = f"{float(match.group(2)):.0f} мс" if match.group(2) else "N/A"
+            return avg, mdev, "Успешно"
+        
+        logger.warning(f"Не удалось распарсить вывод ping для хоста {host}. Вывод:\n{output}")
+        return "⚠️", "⚠️", "Не удалось определить время"
 
     async def _test_shadowsocks_proxy(self, config_path: str) -> (str, str, str, str):
         """Запускает временный ss-local и тестирует через него."""
@@ -156,21 +171,14 @@ class ServiceManager:
         return await self._run_proxy_tests(cmd, diag_port)
 
     async def _test_trojan_proxy(self, config_path: str) -> (str, str, str, str):
-        """Тестирует конфиг Trojan с помощью встроенного теста."""
-        cmd = f"trojan -t -c {config_path}"
-        success, output = await run_shell_command(cmd)
+        """Запускает временный trojan и тестирует через него."""
+        config = ConfigManager('trojan').read_config(config_path)
+        if not config or 'local_port' not in config:
+            return "❌", "N/A", "❌", "local_port не найден"
         
-        if success:
-            return "✅", "Успешно", "N/A", "N/A"
-        else:
-            # Ищем причину ошибки в выводе
-            if "authentication failed" in output:
-                details = "ошибка аутентификации"
-            elif "certificate expired" in output:
-                details = "сертификат истек"
-            else:
-                details = "неизвестная ошибка"
-            return "❌", details, "❌", details
+        diag_port = config['local_port']
+        cmd = f"trojan -c {config_path}"
+        return await self._run_proxy_tests(cmd, diag_port)
 
     async def _run_proxy_tests(self, cmd: str, port: int) -> (str, str, str, str):
         """Общая логика для запуска временного прокси и выполнения тестов."""
@@ -183,31 +191,41 @@ class ServiceManager:
                  stderr = await proc.stderr.read()
                  error_msg = stderr.decode().strip()
                  logger.error(f"Прокси-клиент не запустился: {error_msg}")
-                 return "❌", "клиент не запустился", "❌", "клиент не запустился"
+                 return "❌", "N/A", "❌", "клиент не запустился"
 
-            latency_result, latency_details = await self._test_proxy_latency(port)
+            latency_result, proxy_jitter_result, details = await self._test_proxy_latency(port)
+            if latency_result == "❌":
+                return latency_result, "N/A", "❌", details
+
             speed_result, speed_details = await self._test_download_speed(port)
 
-            return latency_result, latency_details, speed_result, speed_details
+            return latency_result, proxy_jitter_result, speed_result, speed_details
 
         finally:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
 
-    async def _test_proxy_latency(self, port: int) -> (str, str):
-        """Тест 2: Задержка до google.com через прокси."""
-        cmd = f"curl --max-time 10 -o /dev/null -s -w '%{{time_starttransfer}}' --socks5-hostname 127.0.0.1:{port} https://www.google.com"
-        success, output = await run_shell_command(cmd)
+    async def _test_proxy_latency(self, port: int) -> (str, str, str):
+        """Тест 2: Задержка до google.com через прокси (3 замера для расчета джиттера)."""
+        latencies = []
+        for _ in range(3):
+            cmd = f"curl --max-time 10 -o /dev/null -s -w '%{{time_starttransfer}}' --socks5-hostname 127.0.0.1:{port} https://www.google.com"
+            success, output = await run_shell_command(cmd)
+            if success and output:
+                try:
+                    latencies.append(float(output.replace(',', '.')) * 1000)
+                except (ValueError, TypeError):
+                    pass
         
-        if success and output:
-            try:
-                latency_ms = float(output.replace(',', '.')) * 1000
-                if latency_ms > 0:
-                    return f"{latency_ms:.0f} мс", "Успешно"
-            except (ValueError, TypeError):
-                return "⚠️", "Неверный формат ответа"
-        return "❌", "Прокси не отвечает"
+        if len(latencies) >= 2: # Нужно хотя бы 2 замера для расчета
+            avg_latency = f"{statistics.mean(latencies):.0f} мс"
+            jitter = f"{statistics.stdev(latencies):.0f} мс"
+            return avg_latency, jitter, "Успешно"
+        elif len(latencies) == 1:
+            return f"{latencies[0]:.0f} мс", "N/A", "Успешно"
+        
+        return "❌", "N/A", "Прокси не отвечает"
 
     async def _test_download_speed(self, port: int) -> (str, str):
         """Тест 3: Скорость скачивания тестового файла через прокси."""

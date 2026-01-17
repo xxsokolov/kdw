@@ -84,7 +84,7 @@ settings_keyboard = [
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
-key_list_keyboard = [["🚦 Диагностика"], ["➕ Добавить"], ["🔙 Назад"]]
+key_list_keyboard = [["➕ Добавить"], ["🔙 Назад"]]
 cancel_keyboard = [["Отмена"]]
 lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
 
@@ -264,19 +264,26 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         is_active = (config_path == active_config)
         filename = os.path.basename(config_path)
         
-        action_button = InlineKeyboardButton("✅ Активен", callback_data="noop") if is_active else InlineKeyboardButton("🚀 Применить", callback_data=f"key_activate_{key_type}_{filename}")
+        config_data = manager.read_config(config_path)
+        server_host = config_data.get("remote_addr") if key_type == 'trojan' else config_data.get("server", "N/A")
+        ping_result = await service_manager.get_direct_ping(server_host)
+
+        text = f"📄 `{filename}` (Пинг: {ping_result})"
         
-        buttons = [
-            action_button,
+        buttons_row1 = [
+            InlineKeyboardButton("🚀 Применить", callback_data=f"key_activate_{key_type}_{filename}"),
             InlineKeyboardButton("👁️ Показать", callback_data=f"key_view_{key_type}_{filename}"),
             InlineKeyboardButton("🗑️ Удалить", callback_data=f"key_delete_{key_type}_{filename}"),
         ]
-
-        text = f"📄 `{filename}`"
+        if is_active:
+            buttons_row1.pop(0)
+            buttons_row1.insert(0, InlineKeyboardButton("✅ Активен", callback_data="noop"))
+        
+        buttons_row2 = [InlineKeyboardButton("🚦 Тест", callback_data=f"key_diagnose_{key_type}_{filename}")]
 
         msg = await update.effective_chat.send_message(
             text=text,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([buttons_row1, buttons_row2]),
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data['key_config_messages'].append(msg.message_id)
@@ -286,8 +293,7 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 @private_access
 async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обрабатывает нажатия на инлайн-кнопки для действий с ключами (показать, удалить, активировать).
-    Этот обработчик находится вне `ConversationHandler`.
+    Обрабатывает нажатия на инлайн-кнопки для действий с ключами.
     """
     query = update.callback_query
     
@@ -303,15 +309,16 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = query.from_user.id
     try:
-        _, action, key_type, filename = query.data.split('_', 3)
-    except ValueError:
+        action_parts = query.data.split('_')
+        action = action_parts[1]
+        key_type = action_parts[2]
+        filename = "_".join(action_parts[3:])
+    except IndexError:
         log.error(f"Invalid callback_data format in handle_key_action: {query.data}")
         await query.answer("Произошла ошибка, попробуйте снова.", show_alert=True)
         return
 
-    # Обновляем контекст, на случай если пользователь нажал на кнопку в старом сообщении
     context.user_data['key_type'] = key_type
-    
     manager = ConfigManager(key_type)
     config_path = os.path.join(manager.path, filename)
 
@@ -332,17 +339,14 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == 'activate':
         await query.answer("Применение...")
-        # Получаем правильный путь к ссылке из ConfigManager
         target_link = manager.active_config_link
         
-        # Создаем/обновляем символическую ссылку
         success, output = await run_shell_command(f"ln -sf {config_path} {target_link}")
         if not success:
             log.error(f"Ошибка создания symlink: {output}")
             await query.message.reply_text(f"❌ Ошибка применения: не удалось создать символическую ссылку.\n`{output}`", parse_mode=ParseMode.MARKDOWN)
             return
 
-        # Перезапускаем службу
         restart_success, restart_output = await service_manager.restart_service(key_type)
         if not restart_success:
             log.error(f"Ошибка перезапуска {key_type}: {restart_output}")
@@ -350,8 +354,44 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text(f"🚀 Конфиг `{filename}` применен и служба перезапущена.", parse_mode=ParseMode.MARKDOWN)
         
-        # Обновляем список ключей, чтобы показать новый активный
         await menu_key_list(update, context)
+
+    elif action == 'diagnose':
+        if key_type == 'trojan':
+            keyboard = [[InlineKeyboardButton("✅ Да, продолжить", callback_data=f"confirm_diag_trojan_{filename}")], [InlineKeyboardButton("❌ Нет, отмена", callback_data="confirm_cancel")]]
+            await query.message.reply_text(
+                "Для полного теста Trojan требуется временная остановка службы. "
+                "Это может привести к кратковременному разрыву соединения.\n\nПродолжить?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else: # Для Shadowsocks и других
+            await run_full_diagnose(query, context, key_type, config_path)
+
+
+async def run_full_diagnose(query: Update, context: ContextTypes.DEFAULT_TYPE, key_type: str, config_path: str):
+    """Запускает полный тест и отправляет отчет."""
+    await query.message.edit_text(f"🚦 Выполняю полный тест для *{os.path.basename(config_path)}*...", parse_mode=ParseMode.MARKDOWN)
+    
+    res = await service_manager.diagnose_full_proxy(key_type, config_path)
+    
+    if "error" in res:
+        await query.message.edit_text(f"❌ Ошибка теста: {res['error']}")
+        return
+
+    ping = res.get("ping", "❌")
+    latency = res.get("latency", "❌")
+    speed = res.get("speed", "❌")
+    
+    report = f"🚦 Тест *{res.get('server')}*:\n"
+    report += f"   Пинг: {ping}\n"
+    
+    if latency == "❌":
+        report += f"   Прокси: ❌ ({res.get('details', 'ошибка')})"
+    else:
+        report += f"   Прокси: Задержка: {latency} | Скорость: {speed}"
+
+    await query.message.edit_text(report, parse_mode=ParseMode.MARKDOWN)
+
 
 @private_access
 async def ask_for_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -383,7 +423,6 @@ async def handle_new_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
     key_type = context.user_data['key_type']
     manager = ConfigManager(key_type)
 
-    # Ищем все ссылки соответствующего типа в тексте
     url_pattern = rf'{key_type}://[^\s]+'
     urls = re.findall(url_pattern, text)
     
@@ -522,50 +561,6 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(f"Выбран список: *{list_name}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
 
-# --- Диагностика ---
-@private_access
-async def run_diagnose_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Запускает диагностику для выбранного типа прокси и отправляет отчет.
-    """
-    proxy_type = context.user_data.get('key_type')
-    if not proxy_type:
-        await update.message.reply_text("Не выбран тип ключа. Вернитесь в меню 'Ключи'.")
-        return KEY_TYPE_MENU
-
-    message = await update.message.reply_text(f"🚦 Выполняю диагностику всех {proxy_type}-соединений...")
-    
-    results = await service_manager.diagnose_all_proxies(proxy_type)
-    
-    if not results or "error" in results[0]:
-        error_msg = results[0]['error'] if results else "Неизвестная ошибка"
-        await message.edit_text(f"❌ Ошибка диагностики: {error_msg}")
-        return KEY_LIST_MENU
-
-    report_lines = [f"🚦 Диагностика всех {proxy_type}-соединений:"]
-    for res in results:
-        server = res.get("server", "N/A")
-        ping = res.get("ping", "❌")
-        latency = res.get("latency", "❌")
-        speed = res.get("speed", "❌")
-        is_active = res.get("is_active", False)
-        
-        line = f"\n▶️ {server}"
-        if is_active:
-            line += " (Активен)"
-        
-        line += f"\n   Пинг: {ping}"
-        
-        if latency == "❌":
-            line += f" | Прокси: ❌ ({res.get('latency_details', 'ошибка')})"
-        else:
-            line += f" | Задержка: {latency} | Скорость: {speed}"
-            
-        report_lines.append(line)
-
-    await message.edit_text("\n".join(report_lines))
-    return KEY_LIST_MENU
-
 # --- Обработчики меню настроек ---
 @private_access
 async def menu_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -624,8 +619,7 @@ async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 @private_access
 async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обрабатывает нажатия на инлайн-кнопки подтверждения действий (обновить, удалить и т.д.).
-    Этот обработчик находится вне `ConversationHandler`.
+    Обрабатывает нажатия на инлайн-кнопки подтверждения действий.
     """
     query = update.callback_query
     await query.answer()
@@ -635,35 +629,45 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user_id = query.from_user.id
-    jobs = context.job_queue.get_jobs_by_name(f"confirm_{query.message.chat_id}")
-    for job in jobs:
-        job.schedule_removal()
+    
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
-    action = query.data.split('_', 1)[1]
+    action_parts = query.data.split('_')
+    action = action_parts[1]
+    
     log.info(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
 
     if action == "cancel":
-        await query.edit_message_text("Действие отменено.", reply_markup=None)
+        await query.edit_message_text("Действие отменено.")
     elif action == "update":
-        await query.edit_message_text("Начинаю обновление...", reply_markup=None)
+        await query.edit_message_text("Начинаю обновление...")
         asyncio.create_task(installer.run_update(update, context))
     elif action == "uninstall":
-        await query.edit_message_text("Начинаю полное удаление...", reply_markup=None)
+        await query.edit_message_text("Начинаю полное удаление...")
         asyncio.create_task(installer.run_uninstallation(update, context))
     elif action == "restart_services":
-        await query.edit_message_text("⏳ Перезапускаю службы...", reply_markup=None)
+        await query.edit_message_text("⏳ Перезапускаю службы...")
         report = await service_manager.restart_all_services()
-        await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}", reply_markup=None)
+        await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}")
     elif action == "restart_bot":
-        await query.edit_message_text("⏳ Перезагружаюсь...", reply_markup=None)
+        await query.edit_message_text("⏳ Перезагружаюсь...")
         python_executable = os.path.join(sys.prefix, 'bin', 'python')
         os.execv(python_executable, [python_executable] + sys.argv)
+    elif action == "diag" and action_parts[2] == "trojan":
+        filename = "_".join(action_parts[3:])
+        key_type = 'trojan'
+        manager = ConfigManager(key_type)
+        config_path = os.path.join(manager.path, filename)
+        await run_full_diagnose(query, context, key_type, config_path)
+
 
 @private_access
 async def handle_log_level_selection(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     """
     Обрабатывает нажатия на инлайн-кнопки для смены уровня логирования.
-    Этот обработчик находится вне `ConversationHandler`.
     """
     query = update.callback_query
     user_id = query.from_user.id
@@ -793,7 +797,6 @@ def main() -> None:
             ],
             # Меню списка ключей
             KEY_LIST_MENU: [
-                MessageHandler(filters.Regex('^🚦 Диагностика$'), run_diagnose_proxy),
                 MessageHandler(filters.Regex('^➕ Добавить$'), ask_for_key_url),
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_keys),
             ],

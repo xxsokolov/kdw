@@ -94,20 +94,16 @@ class ConfigManager:
         Парсит URL, создает или обновляет конфиг.
         Возвращает статус: "created", "updated", "skipped" или None.
         """
-        if self.service_name == 'shadowsocks':
+        if url.startswith('ss://'):
             return self._create_shadowsocks_from_url(url)
-        if self.service_name == 'trojan':
+        if url.startswith('trojan://'):
             return self._create_trojan_from_url(url)
-        log.error(f"Создание из URL для '{self.service_name}' не поддерживается.")
+        log.error(f"Неподдерживаемый формат URL: {url}")
         return None
 
     def _create_shadowsocks_from_url(self, url: str) -> str | None:
         """Парсит ss:// URL и создает/обновляет конфиг."""
         try:
-            if not url.startswith('ss://'):
-                log.error("URL не начинается с ss://")
-                return None
-
             main_part = url[5:].split('#', 1)[0]
             
             try:
@@ -168,15 +164,24 @@ class ConfigManager:
     def _create_trojan_from_url(self, url: str) -> str | None:
         """Парсит trojan:// URL и создает/обновляет конфиг."""
         try:
-            if not url.startswith('trojan://'):
-                return None
-
-            parts = urlparse(url)
-            password = parts.username
-            server = parts.hostname
-            port = parts.port
+            # Ручной парсинг вместо urlparse
+            main_part = url[9:]
             
-            params = parse_qs(parts.query)
+            # Отделяем якорь
+            if '#' in main_part:
+                main_part = main_part.split('#', 1)[0]
+
+            # Отделяем параметры
+            if '?' in main_part:
+                main_part, query_part = main_part.split('?', 1)
+                params = parse_qs(query_part)
+            else:
+                params = {}
+
+            # Разбираем основную часть
+            password, server_info = main_part.split('@', 1)
+            server, port = server_info.split(':', 1)
+
             sni = params.get('sni', [server])[0]
             
             filename = f"{server}_{port}.json"
@@ -189,7 +194,7 @@ class ConfigManager:
                 "local_addr": "127.0.0.1",
                 "local_port": local_port,
                 "remote_addr": server,
-                "remote_port": port,
+                "remote_port": int(port),
                 "password": [password],
                 "ssl": {
                     "sni": sni

@@ -43,7 +43,7 @@ from core.shell_utils import run_shell_command
 # --- Глобальные переменные и константы ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
-persistence_file = os.path.join(script_dir, "persitencebot")
+persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")
 
 # Состояния для ConversationHandler. Определяют шаги диалога с пользователем.
 (
@@ -80,7 +80,7 @@ settings_keyboard = [
     ["📊 Статус служб", "📝 Уровень логов"],
     ["⚙️ Перезагрузить службы", "🤖 Перезагрузить бота"],
     ["🔄 Обновить", "🗑️ Удалить"],
-    ["🔙 Назад"]
+    ["🔙 Назад", "Пинг в списке"]
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
@@ -184,7 +184,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     Приветствует пользователя и показывает главное меню.
     """
     user = update.message.from_user
-    log.info(f"Start session for {user.full_name}", extra={'user_id': user.id})
+    log.debug(f"Start session for {user.full_name}", extra={'user_id': user.id})
     await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
     return STATUS
 
@@ -227,8 +227,8 @@ async def menu_key_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     Обрабатывает выбор типа ключа, сохраняет его в `user_data` и
     переходит к отображению списка ключей этого типа.
     """
-    user_id = update.effective_user.id
-    key_type = update.message.text.lower()
+    user_id = update.message.from_user.id
+    key_type = update.message.text.lower() # Определение key_type здесь
     
     if key_type not in ['shadowsocks', 'trojan', 'vmess']:
         await update.message.reply_text("Пожалуйста, используйте кнопки.")
@@ -258,17 +258,21 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return KEY_LIST_MENU
 
     msg_list_header = await update.effective_chat.send_message(f"Список конфигураций для *{key_type}*:", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup(key_list_keyboard, resize_keyboard=True))
+    context.user_data['key_config_messages'] = [] # Очищаем перед заполнением
     context.user_data['key_config_messages'].append(msg_list_header.message_id)
+
+    show_ping = config.getboolean('general', 'show_ping_on_list', fallback=True)
 
     for config_path in configs:
         is_active = (config_path == active_config)
         filename = os.path.basename(config_path)
         
-        config_data = manager.read_config(config_path)
-        server_host = config_data.get("remote_addr") if key_type == 'trojan' else config_data.get("server", "N/A")
-        ping_result = await service_manager.get_direct_ping(server_host)
-
-        text = f"📄 `{filename}` (Пинг: {ping_result})"
+        text = f"📄 `{filename}`"
+        if show_ping:
+            config_data = manager.read_config(config_path)
+            server_host = config_data.get("remote_addr") if key_type == 'trojan' else config_data.get("server", "N/A")
+            ping_result = await service_manager.get_direct_ping(server_host)
+            text += f" (Пинг: {ping_result})"
         
         buttons_row1 = [
             InlineKeyboardButton("🚀 Применить", callback_data=f"key_activate_{key_type}_{filename}"),
@@ -279,7 +283,7 @@ async def menu_key_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             buttons_row1.pop(0)
             buttons_row1.insert(0, InlineKeyboardButton("✅ Активен", callback_data="noop"))
         
-        buttons_row2 = [InlineKeyboardButton("🚦 Тест", callback_data=f"key_diagnose_{key_type}_{filename}")]
+        buttons_row2 = [InlineKeyboardButton("🚦 Тест", callback_data=f"key_test_{key_type}_{filename}")]
 
         msg = await update.effective_chat.send_message(
             text=text,
@@ -322,7 +326,7 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     manager = ConfigManager(key_type)
     config_path = os.path.join(manager.path, filename)
 
-    log.info(f"Действие с ключом: '{action}' для '{filename}' (тип: {key_type})", extra={'user_id': user_id})
+    log.debug(f"Действие с ключом: '{action}' для '{filename}' (тип: {key_type})", extra={'user_id': user_id})
 
     if action == 'view':
         config_data = manager.read_config(config_path)
@@ -356,41 +360,64 @@ async def handle_key_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await menu_key_list(update, context)
 
-    elif action == 'diagnose':
+    elif action == 'test':
+        base_text = query.message.text
         if key_type == 'trojan':
-            keyboard = [[InlineKeyboardButton("✅ Да, продолжить", callback_data=f"confirm_diag_trojan_{filename}")], [InlineKeyboardButton("❌ Нет, отмена", callback_data="confirm_cancel")]]
+            context.user_data['test_message_id'] = query.message.message_id
+            context.user_data['test_chat_id'] = query.message.chat_id
+            context.user_data['test_base_text'] = base_text
+            context.user_data['test_reply_markup_json'] = query.message.reply_markup.to_json()
+            keyboard = [[InlineKeyboardButton("✅ Да, продолжить", callback_data=f"confirm_test_trojan_{filename}")], [InlineKeyboardButton("❌ Нет, отмена", callback_data="confirm_cancel")]]
             await query.message.reply_text(
                 "Для полного теста Trojan требуется временная остановка службы. "
                 "Это может привести к кратковременному разрыву соединения.\n\nПродолжить?",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        else: # Для Shadowsocks и других
-            await run_full_diagnose(query, context, key_type, config_path)
+        else:
+            await run_full_test(context, key_type, config_path, query.message.message_id, query.message.chat_id, base_text, query.message.reply_markup)
 
 
-async def run_full_diagnose(query: Update, context: ContextTypes.DEFAULT_TYPE, key_type: str, config_path: str):
-    """Запускает полный тест и отправляет отчет."""
-    await query.message.edit_text(f"🚦 Выполняю полный тест для *{os.path.basename(config_path)}*...", parse_mode=ParseMode.MARKDOWN)
+async def run_full_test(context: ContextTypes.DEFAULT_TYPE, key_type: str, config_path: str, message_id: int, chat_id: int, base_text: str, reply_markup):
+    """Запускает полный тест и обновляет исходное сообщение с результатами."""
     
-    res = await service_manager.diagnose_full_proxy(key_type, config_path)
+    # Убираем старые результаты теста, если они есть
+    clean_base_text = base_text.split('\n')[0]
+
+    await context.bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f"{clean_base_text}\n🚦 Выполняю полный тест...",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    res = await service_manager.test_full_proxy(key_type, config_path)
     
     if "error" in res:
-        await query.message.edit_text(f"❌ Ошибка теста: {res['error']}")
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"{clean_base_text}\n   ↳ Тест: ❌ ({res['error']})",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
-    ping = res.get("ping", "❌")
     latency = res.get("latency", "❌")
     speed = res.get("speed", "❌")
     
-    report = f"🚦 Тест *{res.get('server')}*:\n"
-    report += f"   Пинг: {ping}\n"
-    
     if latency == "❌":
-        report += f"   Прокси: ❌ ({res.get('details', 'ошибка')})"
+        report_line = f"\n   ↳ Тест: ❌ ({res.get('details', 'ошибка')})"
     else:
-        report += f"   Прокси: Задержка: {latency} | Скорость: {speed}"
+        report_line = f"\n   ↳ Тест: ⏱️{latency} | ⚡️{speed}"
 
-    await query.message.edit_text(report, parse_mode=ParseMode.MARKDOWN)
+    await context.bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f"{clean_base_text}{report_line}",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 @private_access
@@ -430,7 +457,7 @@ async def handle_new_key_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"Не найдено ни одной ссылки формата `{key_type}://...` в вашем сообщении.", parse_mode=ParseMode.MARKDOWN)
         return AWAIT_KEY_URL
 
-    log.info(f"Найдено {len(urls)} URL для создания ключей типа '{key_type}'", extra={'user_id': user_id})
+    log.debug(f"Найдено {len(urls)} URL для создания ключей типа '{key_type}'", extra={'user_id': user_id})
     
     results = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
     
@@ -492,7 +519,7 @@ async def show_list_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
-    log.info(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
     content = list_manager.read_list(list_name)
     if len(content) > 4096:
         for x in range(0, len(content), 4096):
@@ -520,7 +547,7 @@ async def add_domains_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.info(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
     added = await list_manager.add_to_list(list_name, domains)
     if added:
         await update.message.reply_text("✅ Домены добавлены. Применяю изменения...")
@@ -550,7 +577,7 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     domains = update.message.text.splitlines()
-    log.info(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
+    log.debug(f"Попытка удалить {len(domains)} домен(ов) из списка '{list_name}'", extra={'user_id': user_id})
     removed = await list_manager.remove_from_list(list_name, domains)
     if removed:
         await update.message.reply_text("✅ Домены удалены. Применяю изменения...")
@@ -578,7 +605,7 @@ async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TY
     Показывает статус системных служб.
     """
     user_id = update.effective_user.id
-    log.info("Запрошен статус служб", extra={'user_id': user_id})
+    log.debug("Запрошен статус служб", extra={'user_id': user_id})
     await update.message.reply_text("⏳ Проверяю статус служб...")
     status_report = await service_manager.get_all_statuses()
     await update.message.reply_text(f"Статус служб:\n\n{status_report}")
@@ -631,37 +658,65 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = query.from_user.id
     
     try:
-        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.delete()
     except Exception:
         pass
 
-    action_parts = query.data.split('_')
-    action = action_parts[1]
-    
-    log.info(f"Подтверждено действие: '{action}'", extra={'user_id': user_id})
+    action_string = query.data.replace("confirm_", "")
+    log.debug(f"Подтверждено действие: '{action_string}'", extra={'user_id': user_id})
 
-    if action == "cancel":
-        await query.edit_message_text("Действие отменено.")
-    elif action == "update":
-        await query.edit_message_text("Начинаю обновление...")
+    if action_string == "cancel":
+        test_message_id = context.user_data.get('test_message_id')
+        if test_message_id:
+            base_text = context.user_data.get('test_base_text', 'Действие отменено.')
+            reply_markup_json = context.user_data.get('test_reply_markup_json')
+            if reply_markup_json:
+                reply_markup = InlineKeyboardMarkup.de_json(json.loads(reply_markup_json), context.bot)
+            else:
+                reply_markup = None
+            await context.bot.edit_message_text(chat_id=query.message.chat_id, message_id=test_message_id, text=base_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    
+    elif action_string == "update":
+        await query.message.reply_text("Начинаю обновление...")
         asyncio.create_task(installer.run_update(update, context))
-    elif action == "uninstall":
-        await query.edit_message_text("Начинаю полное удаление...")
+    
+    elif action_string == "uninstall":
+        await query.message.reply_text("Начинаю полное удаление...")
         asyncio.create_task(installer.run_uninstallation(update, context))
-    elif action == "restart_services":
-        await query.edit_message_text("⏳ Перезапускаю службы...")
+    
+    elif action_string == "restart_services":
+        await query.message.reply_text("⏳ Перезапускаю службы...")
         report = await service_manager.restart_all_services()
-        await query.edit_message_text(f"Отчет о перезапуске:\n\n{report}")
-    elif action == "restart_bot":
-        await query.edit_message_text("⏳ Перезагружаюсь...")
+        await query.message.reply_text(f"Отчет о перезапуске:\n\n{report}")
+    
+    elif action_string == "restart_bot":
+        await query.message.reply_text("⏳ Перезагружаюсь...")
         python_executable = os.path.join(sys.prefix, 'bin', 'python')
         os.execv(python_executable, [python_executable] + sys.argv)
-    elif action == "diag" and action_parts[2] == "trojan":
-        filename = "_".join(action_parts[3:])
+    
+    elif action_string.startswith("test_trojan_"):
+        filename = action_string.replace("test_trojan_", "")
         key_type = 'trojan'
         manager = ConfigManager(key_type)
         config_path = os.path.join(manager.path, filename)
-        await run_full_diagnose(query, context, key_type, config_path)
+        
+        message_id = context.user_data.get('test_message_id')
+        chat_id = context.user_data.get('test_chat_id')
+        base_text_from_data = context.user_data.get('test_base_text')
+        reply_markup_json = context.user_data.get('test_reply_markup_json')
+
+        if message_id and chat_id and base_text_from_data and reply_markup_json:
+            # Восстанавливаем Markdown-разметку для имени файла, чтобы избежать ошибки парсинга
+            ping_match = re.search(r'\(Пинг: .*\)', base_text_from_data)
+            ping_text = ping_match.group(0) if ping_match else ""
+            
+            # Создаем правильный base_text с Markdown
+            base_text = f"📄 `{filename}` {ping_text}".strip()
+
+            reply_markup = InlineKeyboardMarkup.de_json(json.loads(reply_markup_json), context.bot)
+            await run_full_test(context, key_type, config_path, message_id, chat_id, base_text, reply_markup)
+        else:
+            await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Ошибка: не удалось найти исходное сообщение для теста.")
 
 
 @private_access
@@ -710,29 +765,157 @@ async def menu_logging(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return SETTINGS_MENU
 
+@private_access
+async def menu_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню для включения/отключения пинга в списке ключей.
+    """
+    user_id = update.effective_user.id
+    log.debug("Переход в меню 'Пинг в списке'", extra={'user_id': user_id})
+    
+    show_ping = config.getboolean('general', 'show_ping_on_list', fallback=True)
+    
+    status_text = "включен" if show_ping else "отключен"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Включить", callback_data="ping_toggle_on"),
+            InlineKeyboardButton("Выключить", callback_data="ping_toggle_off"),
+        ],
+        [InlineKeyboardButton("❌ Отмена", callback_data="ping_toggle_cancel")]
+    ]
+    
+    await update.message.reply_text(
+        f"Пинг в списке ключей сейчас *{status_text}*.\n\nХотите изменить?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return SETTINGS_MENU
+
+@private_access
+async def handle_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает включение/отключение пинга.
+    """
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    action = query.data.split('_')[-1]
+
+    if action == 'cancel':
+        log.debug("Отмена изменения настройки пинга", extra={'user_id': user_id})
+        await query.edit_message_text("Действие отменено.", reply_markup=None)
+        return
+
+    new_value = (action == 'on')
+    
+    if not config.has_section('general'):
+        config.add_section('general')
+    config.set('general', 'show_ping_on_list', str(new_value).lower())
+    
+    with open(default_config_file, 'w', encoding='utf-8') as configfile:
+        config.write(configfile)
+        
+    # Перечитываем конфиг, чтобы изменения вступили в силу немедленно
+    config.read(default_config_file, encoding='utf-8')
+    
+    status_text = "включен" if new_value else "отключен"
+    log.debug(f"Пинг в списке ключей {status_text}", extra={'user_id': user_id})
+    await query.edit_message_text(f"✅ Пинг в списке ключей *{status_text}*.", parse_mode=ParseMode.MARKDOWN, reply_markup=None)
+
+
 # --- Системные обработчики ---
+
+async def _send_long_technical_message(bot, chat_id, text, prefix):
+    """
+    Вспомогательная функция для отправки длинных технических сообщений по частям.
+    Каждая часть оборачивается в спойлер и тег <pre>.
+    """
+    CHUNK_SIZE = 4000  # Макс. размер части, чтобы не превысить лимит Telegram
+    
+    try:
+        await bot.send_message(chat_id=chat_id, text=prefix, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.error(f"Не удалось отправить префикс для сообщения об ошибке: {e}")
+        return
+
+    escaped_text = html.escape(text)
+    if not escaped_text.strip():
+        escaped_text = "(пусто)"
+
+    for i in range(0, len(escaped_text), CHUNK_SIZE):
+        chunk = escaped_text[i:i + CHUNK_SIZE]
+        message_chunk = f"<tg-spoiler><pre>{chunk}</pre></tg-spoiler>"
+        try:
+            await bot.send_message(chat_id=chat_id, text=message_chunk, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            log.error(f"Не удалось отправить часть сообщения об ошибке в чат {chat_id}: {e}")
+            try:
+                await bot.send_message(chat_id=chat_id, text="<i>[Не удалось отправить часть технической информации]</i>", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Глобальный обработчик ошибок. Логирует ошибку и отправляет
-    сообщение с трассировкой администратору.
+    сообщение с трассировкой в чат, где произошла ошибка, или администратору.
+    Техническая информация разбивается на логические блоки (update, user_data и т.д.)
+    и отправляется отдельными сообщениями, чтобы избежать разрыва данных.
     """
     log.error("Exception while handling an update:", exc_info=context.error)
-    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
-    tb_string = "".join(tb_list)
-    update_str = update.to_dict() if isinstance(update, Update) else str(update)
-    
+
+    # Определяем chat_id для отправки отчета
+    chat_id = None
+    if isinstance(update, Update) and update.effective_chat:
+        chat_id = update.effective_chat.id
+    if not chat_id:
+        try:
+            chat_id = literal_eval(config.get("telegram", "access_ids"))[0]
+            log.debug(f"Не удалось определить чат ошибки, отправка администратору {chat_id}")
+        except Exception:
+            log.error("Не удалось определить чат ошибки и не найден ID администратора.")
+            return
+
+    # 1. Отправляем основное, нетехническое сообщение
+    message = (
+        "<b>🤖 Ой, что-то пошло не так...</b>\n\n"
+        "Произошла внутренняя ошибка. Лог записан. "
+        "Ниже будет отправлена техническая информация для отладки."
+    )
     try:
-        admin_id = literal_eval(config.get("telegram", "access_ids"))[0]
-    except Exception:
-        log.error("Could not parse access_ids or it is empty.")
+        await context.bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.error(f"Не удалось отправить основное сообщение об ошибке в чат {chat_id}: {e}")
         return
 
-    message = (f"An exception was raised while handling an update\n"
-               f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n"
-               f"<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n\n"
-               f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
-               f"<pre>{html.escape(tb_string)}</pre>")
-    await context.bot.send_message(chat_id=admin_id, text=message, parse_mode=ParseMode.HTML)
+    # 2. Готовим и отправляем техническую информацию по частям
+    try:
+        # 2.1. Контекст вызова (Update)
+        update_str = update.to_dict() if isinstance(update, Update) else str(update)
+        update_json_str = json.dumps(update_str, indent=2, ensure_ascii=False)
+        await _send_long_technical_message(context.bot, chat_id, update_json_str, "<b>Контекст вызова (Update):</b>")
+
+        # 2.2. Данные чата (context.chat_data)
+        chat_data_str = str(context.chat_data)
+        await _send_long_technical_message(context.bot, chat_id, chat_data_str, "<b>Данные чата (context.chat_data):</b>")
+
+        # 2.3. Данные пользователя (context.user_data)
+        user_data_str = str(context.user_data)
+        await _send_long_technical_message(context.bot, chat_id, user_data_str, "<b>Данные пользователя (context.user_data):</b>")
+
+        # 2.4. Трассировка ошибки (Traceback)
+        tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+        tb_string = "".join(tb_list)
+        await _send_long_technical_message(context.bot, chat_id, tb_string, "<b>Трассировка ошибки:</b>")
+    except Exception as e:
+        log.error(f"Произошла критическая ошибка внутри error_handler при отправке деталей: {e}")
+        try:
+            await context.bot.send_message(chat_id=chat_id, text="<i>[Произошла ошибка при формировании отчета об ошибке.]</i>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
 
 async def post_restart_hook(application: Application):
     """
@@ -741,7 +924,7 @@ async def post_restart_hook(application: Application):
     """
     restarted_chat_id = os.environ.get('KDW_RESTART_CHAT_ID')
     if restarted_chat_id:
-        log.info(f"Бот был перезапущен. Отправка подтверждения в чат {restarted_chat_id}.")
+        log.debug(f"Бот был перезапущен. Отправка подтверждения в чат {restarted_chat_id}.")
         try:
             await application.bot.send_message(chat_id=restarted_chat_id, text="✅ Бот успешно перезагружен!")
         except Exception as e:
@@ -783,6 +966,7 @@ def main() -> None:
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
                 MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
+                MessageHandler(filters.Regex('^Пинг в списке$'), menu_ping_toggle),
             ],
             # Меню системы обхода
             BYPASS_MENU: [
@@ -808,6 +992,7 @@ def main() -> None:
             # Меню выбора списка доменов
             LISTS_MENU: [
                 MessageHandler(filters.Regex('^🔙 Назад$'), menu_bypass_system),
+                MessageHandler(filters.Regex('^Отмена$'), menu_bypass_system),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, select_list_action),
             ],
             # Меню действий со списком
@@ -820,11 +1005,13 @@ def main() -> None:
             # Ожидание доменов для добавления
             ADD_TO_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
+                MessageHandler(filters.Regex('^Отмена$'), menu_lists),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_domains_to_list),
             ],
             # Ожидание доменов для удаления
             REMOVE_FROM_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
+                MessageHandler(filters.Regex('^Отмена$'), menu_lists),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, remove_domains_from_list),
             ],
         },
@@ -842,6 +1029,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^key_'))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^confirm_'))
     application.add_handler(CallbackQueryHandler(handle_log_level_selection, pattern='^log_'))
+    application.add_handler(CallbackQueryHandler(handle_ping_toggle, pattern='^ping_toggle_'))
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^noop$'))
 
 

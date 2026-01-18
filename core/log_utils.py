@@ -3,6 +3,7 @@ import subprocess
 import sys
 from configparser import ConfigParser
 import os
+import shutil
 
 
 class ContextualFormatter(logging.Formatter):
@@ -89,13 +90,8 @@ def get_logger(name='KDW-Bot'):
     if logger.handlers:
         logger.handlers.clear()
 
-    # --- БЛОК 1: Системный журнал Keenetic (GUI) ---
-    syslog_handler = KeeneticSystemHandler()
-    syslog_format = ContextualFormatter('[%(user_id)s] - %(message)s')
-    syslog_handler.setFormatter(syslog_format)
-    logger.addHandler(syslog_handler)
-
-    # --- БЛОК 2: Консольный вывод (SSH / Docker) ---
+    # --- БЛОК 1: Консольный вывод (SSH / Docker / Windows) ---
+    # Настраиваем в первую очередь, чтобы базовый вывод был всегда
     console_handler = logging.StreamHandler(sys.stdout)
     console_format = ContextualFormatter(
         fmt='%(asctime)s [%(levelname)s] %(name)s: [%(user_id)s] - %(message)s',
@@ -103,6 +99,17 @@ def get_logger(name='KDW-Bot'):
     )
     console_handler.setFormatter(console_format)
     logger.addHandler(console_handler)
+
+    # --- БЛОК 2: Системный журнал Keenetic (GUI) ---
+    # Добавляем, только если утилита 'logger' доступна в системе
+    if shutil.which('logger'):
+        syslog_handler = KeeneticSystemHandler()
+        syslog_format = ContextualFormatter('[%(user_id)s] - %(message)s')
+        syslog_handler.setFormatter(syslog_format)
+        logger.addHandler(syslog_handler)
+    else:
+        # Это сообщение теперь будет выведено в консоль
+        logger.debug("Keenetic 'logger' utility not found. Skipping KeeneticSystemHandler.")
 
     return logger
 
@@ -118,7 +125,7 @@ def set_level(level_name: str, user_id=None):
     # Получаем атрибут уровня из модуля logging. По умолчанию INFO.
     level = getattr(logging, level_name.upper(), logging.INFO)
     log.setLevel(level)
-    log.info(f"Уровень логирования изменен на {level_name.upper()}", extra={'user_id': user_id})
+    log.debug(f"Уровень логирования изменен на {level_name.upper()}", extra={'user_id': user_id})
 
 
 log = get_logger()

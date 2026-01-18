@@ -10,4 +10,4 @@ venv/
 # Файлы Python
 __pycache__/
 *.pyc
-/persitencebot
+/kdw_persistence.pickle

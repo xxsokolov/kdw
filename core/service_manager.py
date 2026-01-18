@@ -11,7 +11,8 @@ from core.config_manager import ConfigManager
 
 class ServiceManager:
     """
-    Управляет службами в /opt/etc/init.d, а также выполняет их диагностику.
+    Класс для управления службами (start, stop, status) и проведения
+    комплексного тестирования прокси-серверов (ping, latency, speed).
     """
     def __init__(self):
         self.init_dir = "/opt/etc/init.d"
@@ -56,7 +57,16 @@ class ServiceManager:
         return "\n".join(report)
 
     async def _control_service(self, service_name: str, command: str) -> (bool, str):
-        """Внутренняя функция для вызова start/stop/restart."""
+        """
+        Внутренняя функция для вызова команд start, stop, restart для службы.
+
+        Args:
+            service_name (str): Имя службы (например, 'shadowsocks').
+            command (str): Команда для выполнения ('start', 'stop', 'restart').
+
+        Returns:
+            tuple[bool, str]: Кортеж (успех, сообщение с результатом).
+        """
         service_key = service_name.lower()
         pattern = None
         for key, p in self.service_map.items():
@@ -71,27 +81,54 @@ class ServiceManager:
         if not script_path:
             return True, f"{service_name}: ❓ не найден"
 
-        logger.info(f"Выполнение '{command}' для службы: {script_path}")
+        logger.debug(f"Выполнение '{command}' для службы: {script_path}")
         success, output = await run_shell_command(f'sh -c "{script_path} {command}"')
 
         if success:
-            logger.info(f"Служба {service_name} успешно {command}.")
+            logger.debug(f"Служба {service_name} успешно {command}.")
             return True, f"{service_name}: ✅ {command}"
         else:
             logger.error(f"Ошибка при {command} {service_name}: {output}")
             return False, f"{service_name}: ❌ ошибка\n`{output}`"
 
     async def start_service(self, service_name: str) -> (bool, str):
+        """
+        Запускает указанную службу.
+
+        Args:
+            service_name (str): Имя службы для запуска.
+
+        Returns:
+            tuple[bool, str]: Кортеж (успех, сообщение с результатом).
+        """
         return await self._control_service(service_name, "start")
 
     async def stop_service(self, service_name: str) -> (bool, str):
+        """
+        Останавливает указанную службу.
+
+        Args:
+            service_name (str): Имя службы для остановки.
+
+        Returns:
+            tuple[bool, str]: Кортеж (успех, сообщение с результатом).
+        """
         return await self._control_service(service_name, "stop")
 
     async def restart_service(self, service_name: str) -> (bool, str):
+        """
+        Перезапускает указанную службу.
+
+        Args:
+            service_name (str): Имя службы для перезапуска.
+
+        Returns:
+            tuple[bool, str]: Кортеж (успех, сообщение с результатом).
+        """
         return await self._control_service(service_name, "restart")
 
     async def restart_all_services(self) -> str:
-        """Перезапускает все известные службы и возвращает отчет."""
+        """Перезапускает все известные службы и возвращает сводный отчет."""
         tasks = [self.restart_service(name) for name in self.service_map.keys()]
         results = await asyncio.gather(*tasks)
         
@@ -99,7 +136,7 @@ class ServiceManager:
         return "\n".join(report) if report else "Не найдено активных служб для перезапуска."
 
     async def get_direct_ping(self, host: str) -> str:
-        """Выполняет быстрый пинг до хоста и возвращает среднее время."""
+        """Выполняет быстрый ICMP пинг до хоста и возвращает среднее время."""
         if not host: return "⚠️"
         success, output = await run_shell_command(f"ping -c 3 -W 2 {host}")
         if not success:
@@ -115,8 +152,28 @@ class ServiceManager:
             
         return "⚠️"
 
-    async def diagnose_full_proxy(self, service_name: str, config_path: str) -> Dict[str, Any]:
-        """Выполняет полную диагностику одного прокси-конфига."""
+    async def test_full_proxy(self, service_name: str, config_path: str) -> Dict[str, Any]:
+        """
+        Выполняет полный, многоступенчатый тест одного прокси-конфига.
+
+        Процесс тестирования:
+        1. Прямой пинг до хоста для измерения задержки и джиттера до сервера.
+        2. Запуск временного локального клиента прокси.
+        3. Тест задержки (latency) и джиттера через прокси до внешнего ресурса.
+        4. Тест скорости скачивания через прокси.
+        5. Остановка временного клиента.
+
+        Для Trojan-прокси основная служба временно останавливается на время теста.
+
+        Args:
+            service_name (str): Имя сервиса ('shadowsocks', 'trojan').
+            config_path (str): Путь к файлу конфигурации для теста.
+
+        Returns:
+            Dict[str, Any]: Словарь с результатами теста. В случае ошибки содержит
+                            ключ 'error'. В случае успеха содержит ключи: 'ping',
+                            'jitter', 'latency', 'proxy_jitter', 'speed', 'details', 'server'.
+        """
         manager = ConfigManager(service_name)
         config = manager.read_config(config_path)
         if not config:
@@ -166,9 +223,9 @@ class ServiceManager:
 
     async def _test_shadowsocks_proxy(self, config_path: str) -> (str, str, str, str):
         """Запускает временный ss-local и тестирует через него."""
-        diag_port = 1099
-        cmd = f"ss-local -c {config_path} -b 127.0.0.1 -l {diag_port}"
-        return await self._run_proxy_tests(cmd, diag_port)
+        test_port = 1099
+        cmd = f"ss-local -c {config_path} -b 127.0.0.1 -l {test_port}"
+        return await self._run_proxy_tests(cmd, test_port)
 
     async def _test_trojan_proxy(self, config_path: str) -> (str, str, str, str):
         """Запускает временный trojan и тестирует через него."""
@@ -176,12 +233,21 @@ class ServiceManager:
         if not config or 'local_port' not in config:
             return "❌", "N/A", "❌", "local_port не найден"
         
-        diag_port = config['local_port']
+        test_port = config['local_port']
         cmd = f"trojan -c {config_path}"
-        return await self._run_proxy_tests(cmd, diag_port)
+        return await self._run_proxy_tests(cmd, test_port)
 
     async def _run_proxy_tests(self, cmd: str, port: int) -> (str, str, str, str):
-        """Общая логика для запуска временного прокси и выполнения тестов."""
+        """
+        Общая логика для запуска временного прокси и выполнения тестов.
+
+        Args:
+            cmd (str): Команда для запуска локального клиента прокси.
+            port (int): Локальный порт, на котором будет работать прокси.
+
+        Returns:
+            tuple[str, str, str, str]: Кортеж с результатами (latency, jitter, speed, details).
+        """
         proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         
         try:
@@ -189,7 +255,7 @@ class ServiceManager:
 
             if proc.returncode is not None:
                  stderr = await proc.stderr.read()
-                 error_msg = stderr.decode().strip()
+                 error_msg = stderr.decode(errors='ignore').strip()
                  logger.error(f"Прокси-клиент не запустился: {error_msg}")
                  return "❌", "N/A", "❌", "клиент не запустился"
 
@@ -228,25 +294,38 @@ class ServiceManager:
         return "❌", "N/A", "Прокси не отвечает"
 
     async def _test_download_speed(self, port: int) -> (str, str):
-        """Тест 3: Скорость скачивания тестового файла через прокси."""
+        """
+        Тест 3: Скорость скачивания тестового файла через прокси.
+
+        Пытается скачать файл с нескольких URL. Возвращает скорость в КБ/с
+        (если < 1 МБ/с) или в МБ/с (если >= 1 МБ/с), округленную до 2 знаков.
+
+        Args:
+            port (int): Локальный порт прокси.
+
+        Returns:
+            tuple[str, str]: Кортеж (результат скорости, детали).
+        """
         test_urls = [
-            "http://speed.hetzner.de/10MB.bin",
-            "http://ovh.net/files/10Mio.dat"
+            "http://speed.hetzner.de/100MB.bin",
+            "http://ovh.net/files/100Mio.dat"
         ]
         
         for url in test_urls:
-            cmd = f"curl --max-time 20 -o /dev/null -s -w '%{{speed_download}}' --socks5-hostname 127.0.0.1:{port} {url}"
+            cmd = f"curl --max-time 60 -o /dev/null -s -w '%{{speed_download}}' --socks5-hostname 127.0.0.1:{port} {url}"
             success, output = await run_shell_command(cmd)
 
             if success and output:
                 try:
                     speed_bytes = float(output.replace(',', '.'))
                     if speed_bytes > 0:
-                        if speed_bytes < 10240: # Если скорость меньше 10 КБ/с, показываем в КБ/с
+                        # Если скорость меньше 1 МБ/с, показываем в КБ/с с двумя знаками
+                        if speed_bytes < (1024 * 1024):
                             speed_kb = speed_bytes / 1024
-                            return f"{speed_kb:.0f} КБ/с", "Успешно"
+                            return f"{speed_kb:.2f} КБ/с", "Успешно"
+                        # Иначе показываем в МБ/с с двумя знаками
                         else:
-                            speed_mb = speed_bytes / 1024 / 1024
+                            speed_mb = speed_bytes / (1024 * 1024)
                             return f"{speed_mb:.2f} МБ/с", "Успешно"
                 except (ValueError, TypeError):
                     continue

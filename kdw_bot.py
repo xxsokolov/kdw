@@ -58,7 +58,8 @@ persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")
     KEY_TYPE_MENU,
     KEY_LIST_MENU,
     AWAIT_KEY_URL,
-) = range(11)
+    AWAIT_MOVE_CONFIRMATION, # Новое состояние
+) = range(12)
 
 # --- Инициализация ---
 # Загрузка конфигурации и инициализация основных модулей ядра.
@@ -86,7 +87,7 @@ bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
 key_list_keyboard = [["➕ Добавить"], ["🔙 Назад"]]
 cancel_keyboard = [["Отмена"]]
-lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить"], ["🔙 Назад"]]
+lists_action_keyboard = [["👁️ Показать", "➕ Добавить"], ["➖ Удалить", "Поиск домена"], ["🔙 Назад"]]
 
 
 # --- Декораторы ---
@@ -492,11 +493,22 @@ async def menu_lists(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int
     """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Списки'", extra={'user_id': user_id})
+    
     lists = list_manager.get_list_files()
-    if not lists:
-        await update.message.reply_text("Не найдено ни одного файла списков.", reply_markup=ReplyKeyboardMarkup(bypass_keyboard, resize_keyboard=True))
-        return BYPASS_MENU
-    keyboard = [[l] for l in lists] + [["🔙 Назад"]]
+    
+    # Создаем клавиатуру с 2 кнопками в ряду
+    keyboard = []
+    row = []
+    for l in lists:
+        row.append(l.capitalize())
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+        
+    keyboard.append(["🔙 Назад"])
+    
     await update.message.reply_text("Выберите список для управления:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return LISTS_MENU
 
@@ -506,10 +518,16 @@ async def select_list_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     Обрабатывает выбор конкретного списка и показывает меню действий с ним.
     """
     user_id = update.effective_user.id
-    list_name = update.message.text
+    list_name = update.message.text.lower()
+    
+    # Проверка, что нажата одна из кнопок
+    if list_name not in list_manager.get_list_files():
+        await update.message.reply_text("Пожалуйста, используйте кнопки.")
+        return LISTS_MENU
+        
     context.user_data['current_list'] = list_name
     log.debug(f"Выбран список '{list_name}' для управления", extra={'user_id': user_id})
-    await update.message.reply_text(f"Выбран список: *{list_name}*\n\nЧто вы хотите сделать?", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"Выбран список: *{list_name.capitalize()}*\n\nЧто вы хотите сделать?", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
 
 @private_access
@@ -520,12 +538,20 @@ async def show_list_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     log.debug(f"Запрошено содержимое списка '{list_name}'", extra={'user_id': user_id})
+    
     content = list_manager.read_list(list_name)
-    if len(content) > 4096:
-        for x in range(0, len(content), 4096):
-            await update.message.reply_text(content[x:x + 4096])
+    
+    if len(content) > 4000: # Оставляем запас
+        await update.message.reply_text(f"Содержимое списка *{list_name.capitalize()}*:", parse_mode=ParseMode.MARKDOWN)
+        # Отправляем содержимое в виде файла, если оно слишком большое
+        file_path = os.path.join(script_dir, f"{list_name}_content.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        await update.message.reply_document(document=open(file_path, 'rb'))
+        os.remove(file_path)
     else:
-        await update.message.reply_text(content)
+        await update.message.reply_text(f"Содержимое списка *{list_name.capitalize()}*:\n\n<pre>{html.escape(content)}</pre>", parse_mode=ParseMode.HTML)
+        
     return SHOW_LIST
 
 @private_access
@@ -536,27 +562,150 @@ async def ask_for_domains_to_add(update: Update, context: ContextTypes.DEFAULT_T
     user_id = update.effective_user.id
     list_name = context.user_data.get('current_list')
     log.debug(f"Запрошено добавление в список '{list_name}'", extra={'user_id': user_id})
-    await update.message.reply_text("Отправьте один или несколько доменов для добавления.", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
+    await update.message.reply_text("Отправьте один или несколько доменов для добавления. Каждый домен с новой строки.", reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True))
     return ADD_TO_LIST
 
 @private_access
 async def add_domains_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Добавляет полученные домены в список и применяет изменения.
+    Добавляет полученные домены в список, проверяя на уникальность.
     """
     user_id = update.effective_user.id
-    list_name = context.user_data.get('current_list')
-    domains = update.message.text.splitlines()
-    log.debug(f"Попытка добавить {len(domains)} домен(ов) в список '{list_name}'", extra={'user_id': user_id})
-    added = await list_manager.add_to_list(list_name, domains)
-    if added:
-        await update.message.reply_text("✅ Домены добавлены. Применяю изменения...")
+    target_list = context.user_data.get('current_list')
+    domains_to_process = [d.strip() for d in update.message.text.splitlines() if d.strip()]
+    
+    log.debug(f"Попытка добавить {len(domains_to_process)} домен(ов) в список '{target_list}'", extra={'user_id': user_id})
+
+    domains_to_add = []
+    domains_to_move = {} # { 'source_list': ['domain1', 'domain2'] }
+    domains_skipped = []
+
+    for domain in domains_to_process:
+        source_list = list_manager.find_domain(domain)
+        if source_list:
+            if source_list == target_list:
+                domains_skipped.append(domain)
+            else:
+                if source_list not in domains_to_move:
+                    domains_to_move[source_list] = []
+                domains_to_move[source_list].append(domain)
+        else:
+            domains_to_add.append(domain)
+
+    # --- Обработка доменов, которые нужно переместить ---
+    if domains_to_move:
+        context.user_data['domains_to_move_data'] = {
+            'target_list': target_list,
+            'domains_to_move': domains_to_move
+        }
+        
+        move_report = []
+        for src, dmns in domains_to_move.items():
+            move_report.append(f"Из списка *{src.capitalize()}*: `{', '.join(dmns)}`")
+        
+        # Исправленная, более простая сборка строки
+        text_parts = [
+            "⚠️ Некоторые домены уже находятся в других списках.\n",
+            "\n".join(move_report),
+            f"\nХотите переместить их в список *{target_list.capitalize()}*?"
+        ]
+        text = "\n".join(text_parts)
+
+        keyboard = [[
+            InlineKeyboardButton("✅ Да, переместить", callback_data="move_domain_confirm"),
+            InlineKeyboardButton("❌ Нет, пропустить", callback_data="move_domain_cancel"),
+        ]]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        
+        # Сохраняем "чистые" домены для добавления после подтверждения
+        context.user_data['domains_to_add_after_move'] = domains_to_add
+        return AWAIT_MOVE_CONFIRMATION
+
+    # --- Если перемещать нечего, просто добавляем "чистые" домены ---
+    final_report = []
+    changes_made = False
+    
+    if domains_to_add:
+        added = await list_manager.add_to_list(target_list, domains_to_add)
+        if added:
+            final_report.append(f"✅ Добавлено: {len(domains_to_add)} шт.")
+            changes_made = True
+        else:
+            # Это может случиться, если домены были добавлены в skipped и add
+            final_report.append(f"ℹ️ Новых доменов для добавления нет.")
+
+    if domains_skipped:
+        final_report.append(f"🤷 Пропущено (уже в списке): {len(domains_skipped)} шт.")
+
+    if not final_report:
+        await update.message.reply_text("Вы не отправили ни одного домена.", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True))
+        return SHOW_LIST
+
+    await update.message.reply_text("\n".join(final_report))
+    
+    if changes_made:
+        await update.message.reply_text("Применяю изменения...")
         _success, message = await list_manager.apply_changes()
-        await update.message.reply_text(message)
-    else:
-        await update.message.reply_text("ℹ️ Эти домены уже были в списке.")
-    await update.message.reply_text(f"Выбран список: *{list_name}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+    await update.message.reply_text(f"Выбран список: *{target_list.capitalize()}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
+
+@private_access
+async def handle_move_domain_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает подтверждение перемещения доменов.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    action = query.data
+    
+    move_data = context.user_data.get('domains_to_move_data', {})
+    target_list = move_data.get('target_list')
+    domains_to_move = move_data.get('domains_to_move')
+    domains_to_add_after_move = context.user_data.get('domains_to_add_after_move', [])
+
+    changes_made = False
+    report = []
+
+    if action == 'move_domain_confirm':
+        log.debug(f"Пользователь {user_id} подтвердил перемещение доменов.", extra={'user_id': user_id})
+        moved_count = 0
+        if domains_to_move and target_list:
+            for source_list, domains in domains_to_move.items():
+                for domain in domains:
+                    await list_manager.move_domain(domain, source_list, target_list)
+                    moved_count += len(domains)
+            report.append(f"🔄 Перемещено: {moved_count} шт.")
+            changes_made = True
+    else:
+        log.debug(f"Пользователь {user_id} отменил перемещение доменов.", extra={'user_id': user_id})
+        skipped_count = sum(len(d) for d in domains_to_move.values())
+        report.append(f"🚫 Перемещение отменено. Пропущено: {skipped_count} шт.")
+
+    # Добавляем домены, которые не требовали перемещения
+    if domains_to_add_after_move:
+        added = await list_manager.add_to_list(target_list, domains_to_add_after_move)
+        if added:
+            report.append(f"✅ Добавлено новых: {len(domains_to_add_after_move)} шт.")
+            changes_made = True
+
+    await query.edit_message_text("\n".join(report))
+
+    if changes_made:
+        await context.bot.send_message(chat_id=query.message.chat_id, text="Применяю изменения...")
+        _success, message = await list_manager.apply_changes()
+        await context.bot.send_message(chat_id=query.message.chat_id, text=message, parse_mode=ParseMode.MARKDOWN)
+
+    # Очистка user_data
+    context.user_data.pop('domains_to_move_data', None)
+    context.user_data.pop('domains_to_add_after_move', None)
+
+    await context.bot.send_message(chat_id=query.message.chat_id, text=f"Выбран список: *{target_list.capitalize()}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    return SHOW_LIST
+
 
 @private_access
 async def ask_for_domains_to_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -582,10 +731,10 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
     if removed:
         await update.message.reply_text("✅ Домены удалены. Применяю изменения...")
         _success, message = await list_manager.apply_changes()
-        await update.message.reply_text(message)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("ℹ️ Этих доменов не было в списке.")
-    await update.message.reply_text(f"Выбран список: *{list_name}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"Выбран список: *{list_name.capitalize()}*", reply_markup=ReplyKeyboardMarkup(lists_action_keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
     return SHOW_LIST
 
 # --- Обработчики меню настроек ---
@@ -1005,14 +1154,16 @@ def main() -> None:
             # Ожидание доменов для добавления
             ADD_TO_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
-                MessageHandler(filters.Regex('^Отмена$'), menu_lists),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_domains_to_list),
             ],
             # Ожидание доменов для удаления
             REMOVE_FROM_LIST: [
                 MessageHandler(filters.Regex('^Отмена$'), select_list_action),
-                MessageHandler(filters.Regex('^Отмена$'), menu_lists),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, remove_domains_from_list),
+            ],
+            # Ожидание подтверждения перемещения домена
+            AWAIT_MOVE_CONFIRMATION: [
+                CallbackQueryHandler(handle_move_domain_confirmation, pattern='^move_domain_')
             ],
         },
         fallbacks=[CommandHandler('start', start)],

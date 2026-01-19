@@ -18,6 +18,8 @@
 #
 # --- 1. Конфигурация ---
 INSTALL_DIR="/opt/etc/kdw"
+LISTS_DIR="${INSTALL_DIR}/lists"
+SCRIPTS_DIR="${INSTALL_DIR}/scripts"
 VENV_DIR="${INSTALL_DIR}/venv"
 REPO_URL="https://github.com/xxsokolov/kdw.git"
 CPYTHON_REPO_URL="https://github.com/python/cpython.git"
@@ -235,6 +237,75 @@ EOF
     # Создание изолированного виртуального окружения Python
     run_with_spinner "Создание venv" python3 -m venv "$VENV_DIR"
     run_with_spinner "Установка зависимостей через pip" "$VENV_DIR/bin/pip" install --upgrade pip -r "$INSTALL_DIR/requirements.txt"
+
+    # Создание структуры директорий KDW
+    echo_step "Создание структуры директорий KDW..."
+    mkdir -p "$LISTS_DIR"
+    mkdir -p "$SCRIPTS_DIR"
+    add_m "dir:$LISTS_DIR"
+    add_m "dir:$SCRIPTS_DIR"
+
+    # Создание скрипта применения правил
+    echo_step "Создание скрипта применения правил apply_lists.sh..."
+    APPLY_SCRIPT_PATH="${SCRIPTS_DIR}/apply_lists.sh"
+    cat > "$APPLY_SCRIPT_PATH" << 'EOF'
+#!/bin/sh
+#
+# KDW Lists Apply Script
+#
+
+# Директория, где лежат списки доменов
+LISTS_DIR="/opt/etc/kdw/lists"
+
+# Список прокси-сервисов, для которых мы будем создавать ipset'ы
+PROXY_TYPES="shadowsocks trojan vmess direct"
+
+# --- Шаг 1: Создание и очистка ipset'ов ---
+echo "Creating and flushing ipsets..."
+
+for PROXY in $PROXY_TYPES; do
+    # Имя ipset'а будет, например, "kdw_trojan"
+    IPSET_NAME="kdw_${PROXY}"
+
+    # Создаем ipset типа hash:net, если он еще не существует.
+    ipset create $IPSET_NAME hash:net -exist
+
+    # Очищаем существующий ipset от старых записей
+    ipset flush $IPSET_NAME
+done
+
+# --- Шаг 2: Наполнение ipset'ов из файлов списков ---
+echo "Populating ipsets from .list files..."
+
+for PROXY in $PROXY_TYPES; do
+    IPSET_NAME="kdw_${PROXY}"
+    LIST_FILE="${LISTS_DIR}/${PROXY}.list"
+
+    if [ -f "$LIST_FILE" ]; then
+        echo "Processing ${LIST_FILE} for ${IPSET_NAME}..."
+        # Читаем файл построчно и добавляем каждый домен в соответствующий ipset
+        grep -v -e '^$' -e '^#' "$LIST_FILE" | while IFS= read -r domain; do
+            ipset add $IPSET_NAME "$domain"
+        done
+    else
+        echo "Warning: List file ${LIST_FILE} not found."
+    fi
+done
+
+# --- Шаг 3: Применение правил iptables (ВАЖНО!) ---
+#
+# Этот блок - ТОЛЬКО ПРИМЕР! Вам нужно адаптировать его под вашу конфигурацию.
+#
+echo "!!! ВНИМАНИЕ: Правила iptables не применяются этим скриптом автоматически. !!!"
+echo "!!! Вы должны настроить их самостоятельно в соответствии с вашей конфигурацией. !!!"
+
+
+echo "Скрипт обновления списков завершен."
+exit 0
+EOF
+    chmod +x "$APPLY_SCRIPT_PATH"
+    add_m "file:$APPLY_SCRIPT_PATH"
+
 
     # Генерация конфигурационного файла
     cat > "$INSTALL_DIR/kdw.cfg" << EOF

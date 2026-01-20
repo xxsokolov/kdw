@@ -1,7 +1,7 @@
 import os
 import asyncio
 from .shell_utils import run_shell_command
-from telegram import Update
+from telegram import Update, Message
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
@@ -69,16 +69,14 @@ class Installer:
         
         return True
 
-    async def run_update(self, update, context):
+    async def run_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message: Message):
         """
-        Выполняет обновление системы через bootstrap.sh, автоматически подтверждая запрос.
+        Выполняет обновление системы через bootstrap.sh, стримя вывод в предоставленное сообщение.
         """
-        message = await update.callback_query.message.reply_text("🚀 Начинаю обновление...")
-        
         if not await self._prepare_bootstrap_script(message):
             return
 
-        # 3. Запускаем обновление, передавая 'y' в stdin
+        # Запускаем обновление, передавая 'y' в stdin
         run_command = f"sh {self.bootstrap_script_path} --update"
         await self._run_command_streamed(run_command, update, context, message, stdin_input=b'y\n')
         # Сообщение об успехе не требуется, так как скрипт bootstrap.sh сам все выведет

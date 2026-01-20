@@ -44,6 +44,7 @@ from core.shell_utils import run_shell_command
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")
+UPDATE_STATE_FILE = "/tmp/kdw_update_state.json"
 
 # Состояния для ConversationHandler. Определяют шаги диалога с пользователем.
 (
@@ -765,7 +766,21 @@ async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Запрашивает подтверждение на обновление бота.
     """
-    await ask_confirmation(update, context, "update", "Вы уверены, что хотите обновить бота до последней версии?")
+    user_id = update.effective_user.id
+    log.debug("Запрошено обновление", extra={'user_id': user_id})
+    text = (
+        "Вы уверены, что хотите обновить бота до последней версии?\n\n"
+        "Это приведет к перезапуску бота. "
+        "Процесс может занять несколько минут."
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Начать обновление", callback_data="update_confirm"),
+            InlineKeyboardButton("❌ Отмена", callback_data="update_cancel"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(text, reply_markup=reply_markup)
     return SETTINGS_MENU
 
 @private_access
@@ -791,6 +806,32 @@ async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """
     await ask_confirmation(update, context, "restart_bot", "Вы уверены, что хотите перезагрузить бота?")
     return SETTINGS_MENU
+
+@private_access
+async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает подтверждение и запуск процесса обновления.
+    """
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "update_confirm":
+        log.debug("Пользователь подтвердил обновление.", extra={'user_id': user_id})
+        
+        # Сохраняем chat_id для хука после обновления
+        update_state = {'chat_id': query.message.chat_id}
+        with open(UPDATE_STATE_FILE, 'w') as f:
+            json.dump(update_state, f)
+            
+        message = await query.message.edit_text("🚀 Обновление началось...", reply_markup=None)
+        
+        # Запускаем обновление в фоне
+        asyncio.create_task(installer.run_update(update, context, message))
+
+    elif query.data == "update_cancel":
+        log.debug("Пользователь отменил обновление.", extra={'user_id': user_id})
+        await query.message.edit_text("Обновление отменено.", reply_markup=None)
 
 @private_access
 async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -824,10 +865,6 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 reply_markup = None
             await context.bot.edit_message_text(chat_id=query.message.chat_id, message_id=test_message_id, text=base_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    elif action_string == "update":
-        await query.message.reply_text("Начинаю обновление...")
-        asyncio.create_task(installer.run_update(update, context))
     
     elif action_string == "uninstall":
         await query.message.reply_text("Начинаю полное удаление...")
@@ -1081,6 +1118,25 @@ async def post_restart_hook(application: Application):
         finally:
             del os.environ['KDW_RESTART_CHAT_ID']
 
+
+async def post_update_hook(application: Application):
+    """
+    Проверяет, был ли бот обновлен, и отправляет уведомление.
+    """
+    if os.path.exists(UPDATE_STATE_FILE):
+        log.debug("Обнаружен файл состояния обновления. Отправка уведомления.")
+        try:
+            with open(UPDATE_STATE_FILE, 'r') as f:
+                state = json.load(f)
+            chat_id = state.get('chat_id')
+            if chat_id:
+                await application.bot.send_message(chat_id=chat_id, text="✅ Обновление успешно завершено!")
+        except Exception as e:
+            log.error(f"Не удалось отправить уведомление о завершении обновления: {e}")
+        finally:
+            os.remove(UPDATE_STATE_FILE)
+
+
 def main() -> None:
     """
     Основная функция.
@@ -1095,6 +1151,7 @@ def main() -> None:
                    .persistence(persistence)
                    .job_queue(job_queue)
                    .post_init(post_restart_hook)
+                   .post_init(post_update_hook)
                    .build())
 
     # Основной обработчик диалогов, управляющий навигацией по меню
@@ -1179,6 +1236,7 @@ def main() -> None:
     # Добавляем обработчики колбэков отдельно от ConversationHandler, чтобы избежать конфликтов состояний
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^key_'))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern='^confirm_'))
+    application.add_handler(CallbackQueryHandler(handle_update_confirmation, pattern='^update_'))
     application.add_handler(CallbackQueryHandler(handle_log_level_selection, pattern='^log_'))
     application.add_handler(CallbackQueryHandler(handle_ping_toggle, pattern='^ping_toggle_'))
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^noop$'))

@@ -8,9 +8,9 @@
 #   Telegram-бота для управления роутером Keenetic.
 #
 # Использование:
-#   sh bootstrap.sh --install [--token=TOKEN --user-id=ID]
-#   sh bootstrap.sh --update
-#   sh bootstrap.sh --uninstall
+#   sh bootstrap.sh --install [--token=TOKEN --user-id=ID] [-y]
+#   sh bootstrap.sh --update [-y]
+#   sh bootstrap.sh --uninstall [-y]
 #
 # Автор: xxsokolov
 # GitHub: https://github.com/xxsokolov/KDW
@@ -26,7 +26,6 @@ CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
-# Пакет start-stop-daemon удален из списка, т.к. он обычно является частью busybox/procps-ng в современных Entware
 PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip"
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
@@ -41,7 +40,7 @@ PKG_MAP="
 # Список служб для автоматизированного управления (остановка/запуск/очистка)
 MANAGED_SERVICES="shadowsocks trojan v2ray tor dnsmasq kdwbot"
 
-# --- 2. Вспомогательные функции ---
+# --- 2. Вспомогательные функции и парсинг аргументов ---
 
 # Вывод этапов установки
 echo_step() { printf "\033[0;36m->\033[0m %s\n" "$1"; }
@@ -49,6 +48,15 @@ echo_step() { printf "\033[0;36m->\033[0m %s\n" "$1"; }
 echo_ok() { printf "\033[0;32m[OK] %s\033[0m\n" "$1"; }
 # Вывод ошибки и выход
 echo_err() { printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"; exit 1; }
+
+# Парсинг флага -y для автоматического подтверждения
+AUTO_CONFIRM=false
+for arg in "$@"; do
+    if [ "$arg" = "-y" ]; then
+        AUTO_CONFIRM=true
+        break
+    fi
+done
 
 # Регистрация созданных файлов в манифест для последующего чистого удаления
 add_m() {
@@ -159,11 +167,14 @@ do_install() {
     done
 
     if [ -z "$BOT_TOKEN" ] || [ -z "$USER_ID" ]; then
-      echo_step "Настройка доступа"
-      printf "Введите Telegram Bot Token: "
-      read BOT_TOKEN
-      printf "Введите ваш Telegram User ID: "
-      read USER_ID
+        if [ "$AUTO_CONFIRM" = "true" ]; then
+            echo_err "В неинтерактивном режиме (-y) необходимо указать --token и --user-id."
+        fi
+        echo_step "Настройка доступа"
+        printf "Введите Telegram Bot Token: "
+        read BOT_TOKEN
+        printf "Введите ваш Telegram User ID: "
+        read USER_ID
     fi
 
     run_with_spinner "Обновление списка пакетов opkg" opkg update
@@ -452,17 +463,16 @@ EOF
 
 case "$1" in
     --uninstall)
-        echo "ВНИМАНИЕ: Это действие полностью удалит бота, все его компоненты и конфигурационные файлы."
-        printf "Вы уверены, что хотите продолжить? (y/N): "
-        read -r confirmation
-        case "$confirmation" in
-            [yY]|[yY][eE][sS])
-                do_uninstall
-                ;;
-            *)
-                echo "Удаление отменено."
-                ;;
-        esac
+        if [ "$AUTO_CONFIRM" = "false" ]; then
+            echo "ВНИМАНИЕ: Это действие полностью удалит бота, все его компоненты и конфигурационные файлы."
+            printf "Вы уверены, что хотите продолжить? (y/N): "
+            read -r confirmation
+            case "$confirmation" in
+                [yY]|[yY][eE][sS]) ;;
+                *) echo "Удаление отменено."; exit 0 ;;
+            esac
+        fi
+        do_uninstall
         exit 0
         ;;
     --install)
@@ -470,19 +480,16 @@ case "$1" in
         do_install "$@"
         ;;
     --update)
-        echo "ВНИМАНИЕ: Обновление включает в себя полное удаление текущей версии и установку последней."
-        echo "Ваш конфигурационный файл (токен и ID) будет сохранен и использован для новой установки."
-        printf "Вы уверены, что хотите продолжить? (y/N): "
-        read -r confirmation
-        case "$confirmation" in
-            [yY]|[yY][eE][sS])
-                # Продолжаем, если ответ 'y' или 'yes'
-                ;;
-            *)
-                echo "Обновление отменено."
-                exit 0
-                ;;
-        esac
+        if [ "$AUTO_CONFIRM" = "false" ]; then
+            echo "ВНИМАНИЕ: Обновление включает в себя полное удаление текущей версии и установку последней."
+            echo "Ваш конфигурационный файл (токен и ID) будет сохранен и использован для новой установки."
+            printf "Вы уверены, что хотите продолжить? (y/N): "
+            read -r confirmation
+            case "$confirmation" in
+                [yY]|[yY][eE][sS]) ;;
+                *) echo "Обновление отменено."; exit 0 ;;
+            esac
+        fi
 
         echo_step "Начало процесса обновления..."
         CONFIG_ARGS=""
@@ -499,7 +506,9 @@ case "$1" in
             echo_err "Не удалось скачать скрипт обновления."
         fi
 
-        # Исправленная логика: прерываемся, если любой из шагов не удался
+        # Добавляем флаг -y к дочернему вызову, если он был в родительском
+        [ "$AUTO_CONFIRM" = "true" ] && CONFIG_ARGS="$CONFIG_ARGS -y"
+
         if do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS; then
             echo_ok "Обновление завершено."
         else
@@ -515,8 +524,10 @@ case "$1" in
         echo "                   --user-id=<USER_ID>"
         echo "  --update       Обновить бота до последней версии"
         echo "  --uninstall    Полностью удалить бота и его компоненты"
+        echo "  -y             Автоматически подтверждать все запросы"
         echo ""
         echo "Пример:"
         echo "  $0 --install --token=123:ABC --user-id=456"
+        echo "  $0 --update -y"
         ;;
 esac

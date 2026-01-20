@@ -31,3 +31,8 @@ ipv6_first=True
 
 
 [logging]
+
+[firewall]
+# Тип прокси, который будет использоваться для режима "проксировать весь трафик".
+# Допустимые значения: trojan, vmess, shadowsocks
+default_proxy_type = trojan

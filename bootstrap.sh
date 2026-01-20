@@ -21,6 +21,7 @@ INSTALL_DIR="/opt/etc/kdw"
 LISTS_DIR="${INSTALL_DIR}/lists"
 SCRIPTS_DIR="${INSTALL_DIR}/scripts"
 VENV_DIR="${INSTALL_DIR}/venv"
+NDM_DIR="/opt/etc/ndm/fs.d"
 REPO_URL="https://github.com/xxsokolov/kdw.git"
 CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
@@ -247,7 +248,7 @@ EOF
 
     # Клонирование репозитория бота
     run_with_spinner "Клонирование репозитория бота" git clone --depth 1 "$REPO_URL" "/opt/tmp/repo"
-    cp -r /opt/tmp/repo/core /opt/tmp/repo/kdw_bot.py /opt/tmp/repo/requirements.txt "$INSTALL_DIR/"
+    cp -r /opt/tmp/repo/* "$INSTALL_DIR/"
     rm -rf /opt/tmp/repo
 
     # Создание изолированного виртуального окружения Python
@@ -261,73 +262,65 @@ EOF
     add_m "dir:$LISTS_DIR"
     add_m "dir:$SCRIPTS_DIR"
 
-    # Создание скрипта применения правил
-    echo_step "Создание скрипта применения правил apply_lists.sh..."
-    APPLY_SCRIPT_PATH="${SCRIPTS_DIR}/apply_lists.sh"
-    cat > "$APPLY_SCRIPT_PATH" << 'EOF'
+    # --- Создание файлов для Firewall ---
+    echo_step "Создание файлов для управления Firewall..."
+
+    # 1. Файл состояния
+    FIREWALL_STATE_FILE="${INSTALL_DIR}/firewall_mode.state"
+    echo "flushed" > "$FIREWALL_STATE_FILE"
+    add_m "file:$FIREWALL_STATE_FILE"
+
+    # 2. Главный скрипт автозапуска
+    AUTORUN_SCRIPT_PATH="${SCRIPTS_DIR}/kdw-firewall-autorun.sh"
+    cat > "$AUTORUN_SCRIPT_PATH" << 'EOF'
 #!/bin/sh
-#
-# KDW Lists Apply Script
-#
+STATE_FILE="/opt/etc/kdw/firewall_mode.state"
+SCRIPTS_DIR="/opt/etc/kdw/scripts"
 
-# Директория, где лежат списки доменов
-LISTS_DIR="/opt/etc/kdw/lists"
+if [ ! -f "$STATE_FILE" ]; then
+    exit 0
+fi
 
-# Список прокси-сервисов, для которых мы будем создавать ipset'ы
-PROXY_TYPES="shadowsocks trojan vmess direct"
+MODE=$(cat "$STATE_FILE")
 
-# --- Шаг 1: Создание и очистка ipset'ов ---
-echo "Creating and flushing ipsets..."
-
-for PROXY in $PROXY_TYPES; do
-    # Имя ipset'а будет, например, "kdw_trojan"
-    IPSET_NAME="kdw_${PROXY}"
-
-    # Создаем ipset типа hash:net, если он еще не существует.
-    ipset create $IPSET_NAME hash:net -exist
-
-    # Очищаем существующий ipset от старых записей
-    ipset flush $IPSET_NAME
-done
-
-# --- Шаг 2: Наполнение ipset'ов из файлов списков ---
-echo "Populating ipsets from .list files..."
-
-for PROXY in $PROXY_TYPES; do
-    IPSET_NAME="kdw_${PROXY}"
-    LIST_FILE="${LISTS_DIR}/${PROXY}.list"
-
-    if [ -f "$LIST_FILE" ]; then
-        echo "Processing ${LIST_FILE} for ${IPSET_NAME}..."
-        # Читаем файл построчно и добавляем каждый домен в соответствующий ipset
-        grep -v -e '^$' -e '^#' "$LIST_FILE" | while IFS= read -r domain; do
-            ipset add $IPSET_NAME "$domain"
-        done
-    else
-        echo "Warning: List file ${LIST_FILE} not found."
-    fi
-done
-
-# --- Шаг 3: Применение правил iptables (ВАЖНО!) ---
-#
-# Этот блок - ТОЛЬКО ПРИМЕР! Вам нужно адаптировать его под вашу конфигурацию.
-#
-echo "!!! ВНИМАНИЕ: Правила iptables не применяются этим скриптом автоматически. !!!"
-echo "!!! Вы должны настроить их самостоятельно в соответствии с вашей конфигурацией. !!!"
-
-
-echo "Скрипт обновления списков завершен."
-exit 0
+case "$MODE" in
+    lists_only)
+        sh "${SCRIPTS_DIR}/kdw_apply_proxy_lists.sh"
+        ;;
+    all_traffic)
+        # Для этого режима нужны параметры, которые бот передает при интерактивном запуске.
+        # При автозапуске мы не можем их знать, поэтому просто сбрасываем правила.
+        # Это безопасное поведение по умолчанию.
+        sh "${SCRIPTS_DIR}/kdw_flush_proxy_rules.sh"
+        ;;
+    flushed)
+        sh "${SCRIPTS_DIR}/kdw_flush_proxy_rules.sh"
+        ;;
+esac
 EOF
-    chmod +x "$APPLY_SCRIPT_PATH"
-    add_m "file:$APPLY_SCRIPT_PATH"
+    chmod +x "$AUTORUN_SCRIPT_PATH"
+    add_m "file:$AUTORUN_SCRIPT_PATH"
 
+    # 3. Скрипт интеграции с Keenetic
+    mkdir -p "$NDM_DIR"
+    KEENETIC_SCRIPT_PATH="${NDM_DIR}/100-kdw-firewall.sh"
+    cat > "$KEENETIC_SCRIPT_PATH" << EOF
+#!/bin/sh
+# Запускает скрипт KDW Firewall при старте системы
+sh "${AUTORUN_SCRIPT_PATH}"
+EOF
+    chmod +x "$KEENETIC_SCRIPT_PATH"
+    add_m "file:$KEENETIC_SCRIPT_PATH"
+    add_m "dir:$NDM_DIR"
 
     # Генерация конфигурационного файла
     cat > "$INSTALL_DIR/kdw.cfg" << EOF
 [telegram]
 token = $BOT_TOKEN
 access_ids = [$USER_ID]
+
+[firewall]
+default_proxy_type = trojan
 EOF
     add_m "file:$INSTALL_DIR/kdw.cfg"
 
@@ -444,9 +437,8 @@ EOF
     add_m "file:$SERVICE_FILE"
 
     # Регистрация всех файлов проекта в манифест
-    find "$INSTALL_DIR" -mindepth 1 | while read -r f; do
-        [ -d "$f" ] && add_m "dir:$f" || add_m "file:$f"
-    done
+    find "$INSTALL_DIR" -mindepth 1 -type f | while read -r f; do add_m "file:$f"; done
+    find "$INSTALL_DIR" -mindepth 1 -type d | while read -r d; do add_m "dir:$d"; done
 
     # Финальный запуск всех компонентов
     manage_services "start"

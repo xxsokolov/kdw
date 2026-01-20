@@ -21,6 +21,7 @@ import logging
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -45,6 +46,14 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")
 UPDATE_STATE_FILE = "/tmp/kdw_update_state.json"
+FIREWALL_STATE_FILE = "/opt/etc/kdw/firewall_mode.state"
+
+# Порты для прокси
+PROXY_PORTS = {
+    "shadowsocks": 1080,
+    "trojan": 10829,
+    "vmess": 10810,
+}
 
 # Состояния для ConversationHandler. Определяют шаги диалога с пользователем.
 (
@@ -59,8 +68,11 @@ UPDATE_STATE_FILE = "/tmp/kdw_update_state.json"
     KEY_TYPE_MENU,
     KEY_LIST_MENU,
     AWAIT_KEY_URL,
-    AWAIT_MOVE_CONFIRMATION, # Новое состояние
-) = range(12)
+    AWAIT_MOVE_CONFIRMATION,
+    SYSTEM_MANAGEMENT_MENU,
+    BOT_SETTINGS_MENU,
+    FIREWALL_MENU,
+) = range(15)
 
 # --- Инициализация ---
 # Загрузка конфигурации и инициализация основных модулей ядра.
@@ -79,10 +91,22 @@ list_manager = ListManager()
 # Определение раскладок кнопок для различных меню.
 main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
 settings_keyboard = [
-    ["📊 Статус служб", "📝 Уровень логов"],
-    ["⚙️ Перезагрузить службы", "🤖 Перезагрузить бота"],
-    ["🔄 Обновить", "🗑️ Удалить"],
-    ["🔙 Назад", "Пинг в списке"]
+    ["Управление системой", "Настройки бота"],
+    ["Правила Firewall"],
+    ["🔙 Назад"]
+]
+system_management_keyboard = [
+    ["📊 Статус служб", "⚙️ Перезагрузить службы"],
+    ["🤖 Перезагрузить бота", "🔄 Обновить"],
+    ["🗑️ Удалить", "🔙 Назад"]
+]
+bot_settings_keyboard = [
+    ["📝 Уровень логов", "Пинг в списке"],
+    ["Прокси для всего трафика"],
+    ["🔙 Назад"]
+]
+firewall_keyboard = [
+    ["🔙 Назад"]
 ]
 bypass_keyboard = [["Ключи", "Списки"], ["🔙 Назад"]]
 key_types_keyboard = [["Shadowsocks"], ["Trojan", "Vmess"], ["🔙 Назад"]]
@@ -118,29 +142,30 @@ def private_access(f):
 async def remove_confirmation_keyboard(context: ContextTypes.DEFAULT_TYPE):
     """
     Удаляет инлайн-клавиатуру подтверждения по истечении времени.
-    Вызывается через `JobQueue`.
+    Вызывается через `JobQueue`. Стала более устойчивой к ошибкам.
     """
     job = context.job
     if not (job and isinstance(job.data, dict) and 'message_id' in job.data and 'text' in job.data):
         return
 
-    await context.bot.edit_message_text(
-        chat_id=job.chat_id,
-        message_id=job.data['message_id'],
-        text=f"{job.data['text']}\n\n🚫 Отменено по таймауту",
-        reply_markup=None
-    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=job.chat_id,
+            message_id=job.data['message_id'],
+            text=f"{job.data['text']}\n\n🚫 Отменено по таймауту",
+            reply_markup=None
+        )
+    except BadRequest as e:
+        if "Message to edit not found" in str(e):
+            log.debug(f"Job to remove confirmation keyboard for message {job.data['message_id']} ran, but message was already deleted.")
+        else:
+            raise e # Перебрасываем другие ошибки BadRequest
 
 async def ask_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, text: str):
     """
     Отправляет сообщение с инлайн-кнопками "Подтвердить" и "Отмена".
     Запускает задачу на удаление этих кнопок через 30 секунд.
-
-    Args:
-        update: Объект Update от Telegram.
-        context: Контекст бота.
-        action (str): Строка действия для `callback_data` (например, "update").
-        text (str): Текст сообщения, запрашивающего подтверждение.
+    Использует уникальное имя для задачи.
     """
     user_id = update.effective_user.id
     log.debug(f"Запрос подтверждения '{action}'", extra={'user_id': user_id})
@@ -153,12 +178,14 @@ async def ask_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, a
     reply_markup = InlineKeyboardMarkup(keyboard)
     message = await update.message.reply_text(text, reply_markup=reply_markup)
 
+    # Создаем уникальное имя для задачи, чтобы ее можно было отменить
+    job_name = f"confirm_timeout_{message.message_id}"
     context.job_queue.run_once(
         remove_confirmation_keyboard,
         30,
         chat_id=update.effective_chat.id,
         data={'message_id': message.message_id, 'text': text},
-        name=f"confirm_{update.effective_chat.id}"
+        name=job_name
     )
 
 async def clear_key_config_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -742,12 +769,128 @@ async def remove_domains_from_list(update: Update, context: ContextTypes.DEFAULT
 @private_access
 async def menu_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Отображает меню настроек.
+    Отображает новое, реорганизованное меню настроек.
     """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Настройки'", extra={'user_id': user_id})
-    await update.message.reply_text("Меню настроек.", reply_markup=ReplyKeyboardMarkup(settings_keyboard, resize_keyboard=True))
+    await update.message.reply_text("Выберите категорию настроек:", reply_markup=ReplyKeyboardMarkup(settings_keyboard, resize_keyboard=True))
     return SETTINGS_MENU
+
+@private_access
+async def menu_system_management(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню управления системой.
+    """
+    user_id = update.effective_user.id
+    log.debug("Переход в меню 'Управление системой'", extra={'user_id': user_id})
+    await update.message.reply_text("Меню управления системой.", reply_markup=ReplyKeyboardMarkup(system_management_keyboard, resize_keyboard=True))
+    return SYSTEM_MANAGEMENT_MENU
+
+@private_access
+async def menu_bot_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню настроек бота.
+    """
+    user_id = update.effective_user.id
+    log.debug("Переход в меню 'Настройки бота'", extra={'user_id': user_id})
+    await update.message.reply_text("Меню настроек бота.", reply_markup=ReplyKeyboardMarkup(bot_settings_keyboard, resize_keyboard=True))
+    return BOT_SETTINGS_MENU
+
+@private_access
+async def menu_firewall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню управления правилами Firewall.
+    """
+    user_id = update.effective_user.id
+    log.debug("Переход в меню 'Правила Firewall'", extra={'user_id': user_id})
+    
+    # Получаем текущее состояние
+    script_path = os.path.join(script_dir, "scripts", "kdw_get_firewall_state.sh")
+    success, current_state = await run_shell_command(f"sh {script_path}")
+    current_state = current_state.strip() if success else "unknown"
+
+    # Маркируем активную кнопку
+    def get_button_text(mode, text):
+        return f"✅ {text}" if mode == current_state else text
+
+    keyboard = [
+        [InlineKeyboardButton(get_button_text("lists_only", "Применить правила для списков"), callback_data="firewall_apply_lists")],
+        [InlineKeyboardButton(get_button_text("all_traffic", "Применить правила для всего трафика"), callback_data="firewall_apply_all")],
+        [InlineKeyboardButton(get_button_text("flushed", "Сбросить все правила"), callback_data="firewall_flush")],
+    ]
+    
+    await update.message.reply_text(
+        "Здесь вы можете управлять правилами `iptables` для прокси.\n\n"
+        "Выберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    await update.message.reply_text("Меню Firewall.", reply_markup=ReplyKeyboardMarkup(firewall_keyboard, resize_keyboard=True))
+    return FIREWALL_MENU
+
+@private_access
+async def handle_firewall_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает нажатия на инлайн-кнопки для управления правилами Firewall.
+    """
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    action = query.data.split("firewall_")[-1]
+    
+    log.debug(f"Запрошено действие с Firewall: {action}", extra={'user_id': user_id})
+
+    command = ""
+    new_state = ""
+    
+    if action == "apply_lists":
+        script_path = os.path.join(script_dir, "scripts", "kdw_apply_proxy_lists.sh")
+        command = f"sh {script_path}"
+        new_state = "lists_only"
+        await query.message.edit_text("⏳ Применяю правила для списков...", reply_markup=None)
+
+    elif action == "flush":
+        script_path = os.path.join(script_dir, "scripts", "kdw_flush_proxy_rules.sh")
+        command = f"sh {script_path}"
+        new_state = "flushed"
+        await query.message.edit_text("⏳ Сбрасываю правила...", reply_markup=None)
+
+    elif action == "apply_all":
+        default_proxy = config.get('firewall', 'default_proxy_type', fallback='trojan')
+        manager = ConfigManager(default_proxy)
+        
+        if not manager.get_active_config():
+            await query.message.edit_text(
+                f"❌ Ошибка: не найден активный ключ для прокси типа '{default_proxy}', "
+                f"установленного по умолчанию в kdw.cfg.",
+                reply_markup=None
+            )
+            return FIREWALL_MENU
+            
+        port = PROXY_PORTS.get(default_proxy)
+        if not port:
+            await query.message.edit_text(f"❌ Ошибка: не определен порт для прокси типа '{default_proxy}'.", reply_markup=None)
+            return FIREWALL_MENU
+
+        script_path = os.path.join(script_dir, "scripts", "kdw_apply_all_traffic_proxy.sh")
+        command = f"sh {script_path} {default_proxy} {port}"
+        new_state = "all_traffic"
+        await query.message.edit_text(f"⏳ Применяю правила для всего трафика через {default_proxy}...", reply_markup=None)
+
+    else:
+        return FIREWALL_MENU
+
+    # Записываем новое состояние для сохранения после перезагрузки
+    with open(FIREWALL_STATE_FILE, "w") as f:
+        f.write(new_state)
+
+    success, output = await run_shell_command(command)
+    
+    if success:
+        await query.message.edit_text(f"✅ Готово!\n\n<pre>{html.escape(output)}</pre>", parse_mode=ParseMode.HTML)
+    else:
+        await query.message.edit_text(f"❌ Ошибка выполнения скрипта!\n\n<pre>{html.escape(output)}</pre>", parse_mode=ParseMode.HTML)
+        
+    return FIREWALL_MENU
 
 @private_access
 async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -759,7 +902,7 @@ async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("⏳ Проверяю статус служб...")
     status_report = await service_manager.get_all_statuses()
     await update.message.reply_text(f"Статус служб:\n\n{status_report}")
-    return SETTINGS_MENU
+    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -781,7 +924,7 @@ async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(text, reply_markup=reply_markup)
-    return SETTINGS_MENU
+    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def ask_uninstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -789,7 +932,7 @@ async def ask_uninstall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     Запрашивает подтверждение на полное удаление бота.
     """
     await ask_confirmation(update, context, "uninstall", "Вы уверены, что хотите **полностью** удалить бота?")
-    return SETTINGS_MENU
+    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def ask_restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -797,7 +940,7 @@ async def ask_restart_services(update: Update, context: ContextTypes.DEFAULT_TYP
     Запрашивает подтверждение на перезапуск служб.
     """
     await ask_confirmation(update, context, "restart_services", "Вы уверены, что хотите перезагрузить все службы обхода?")
-    return SETTINGS_MENU
+    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -805,7 +948,7 @@ async def ask_restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     Запрашивает подтверждение на перезапуск самого бота.
     """
     await ask_confirmation(update, context, "restart_bot", "Вы уверены, что хотите перезагрузить бота?")
-    return SETTINGS_MENU
+    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -837,6 +980,7 @@ async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAU
 async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Обрабатывает нажатия на инлайн-кнопки подтверждения действий.
+    Теперь также отменяет задачу авто-отмены.
     """
     query = update.callback_query
     await query.answer()
@@ -844,6 +988,15 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not query.message:
         log.warning("query.message is None in handle_confirmation")
         return
+
+    # --- NEW: Отменяем задачу авто-отмены ---
+    job_name = f"confirm_timeout_{query.message.message_id}"
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    if current_jobs:
+        for job in current_jobs:
+            job.schedule_removal()
+        log.debug(f"Отменена задача авто-отмены подтверждения: {job_name}")
+    # --- END NEW ---
 
     user_id = query.from_user.id
     
@@ -949,7 +1102,7 @@ async def menu_logging(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> i
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
-    return SETTINGS_MENU
+    return BOT_SETTINGS_MENU
 
 @private_access
 async def menu_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -976,7 +1129,7 @@ async def menu_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
-    return SETTINGS_MENU
+    return BOT_SETTINGS_MENU
 
 @private_access
 async def handle_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE):
@@ -1009,6 +1162,62 @@ async def handle_ping_toggle(update: Update, _context: ContextTypes.DEFAULT_TYPE
     status_text = "включен" if new_value else "отключен"
     log.debug(f"Пинг в списке ключей {status_text}", extra={'user_id': user_id})
     await query.edit_message_text(f"✅ Пинг в списке ключей *{status_text}*.", parse_mode=ParseMode.MARKDOWN, reply_markup=None)
+
+@private_access
+async def menu_default_proxy_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает меню выбора типа прокси по умолчанию для режима "весь трафик".
+    """
+    user_id = update.effective_user.id
+    log.debug("Переход в меню 'Прокси для всего трафика'", extra={'user_id': user_id})
+    
+    current_default = config.get('firewall', 'default_proxy_type', fallback='trojan')
+    
+    keyboard = []
+    for proxy_type in PROXY_PORTS.keys():
+        button_text = f"• {proxy_type.capitalize()} •" if proxy_type == current_default else proxy_type.capitalize()
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"set_default_proxy_{proxy_type}")])
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="set_default_proxy_cancel")])
+    
+    await update.message.reply_text(
+        f"Текущий прокси по умолчанию для режима 'весь трафик': *{current_default}*.\n\n"
+        "Выберите новый тип прокси:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return BOT_SETTINGS_MENU
+
+@private_access
+async def handle_default_proxy_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает выбор нового типа прокси по умолчанию.
+    """
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    action = query.data.split("set_default_proxy_")[-1]
+
+    if action == 'cancel':
+        log.debug("Отмена смены прокси по умолчанию.", extra={'user_id': user_id})
+        await query.edit_message_text("Действие отменено.", reply_markup=None)
+        return
+
+    new_default_proxy = action
+    
+    if not config.has_section('firewall'):
+        config.add_section('firewall')
+    config.set('firewall', 'default_proxy_type', new_default_proxy)
+    
+    with open(default_config_file, 'w', encoding='utf-8') as configfile:
+        config.write(configfile)
+        
+    # Перечитываем конфиг
+    config.read(default_config_file, encoding='utf-8')
+    
+    log.debug(f"Прокси по умолчанию изменен на '{new_default_proxy}'", extra={'user_id': user_id})
+    await query.edit_message_text(f"✅ Прокси по умолчанию для режима 'весь трафик' изменен на *{new_default_proxy}*.", parse_mode=ParseMode.MARKDOWN, reply_markup=None)
 
 
 # --- Системные обработчики ---
@@ -1163,16 +1372,32 @@ def main() -> None:
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
                 MessageHandler(filters.Regex('^Настройки$'), menu_settings),
             ],
-            # Меню настроек
+            # Меню настроек (теперь это хаб)
             SETTINGS_MENU: [
+                MessageHandler(filters.Regex('^Управление системой$'), menu_system_management),
+                MessageHandler(filters.Regex('^Настройки бота$'), menu_bot_settings),
+                MessageHandler(filters.Regex('^Правила Firewall$'), menu_firewall),
+                MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
+            ],
+            # Новое подменю "Управление системой"
+            SYSTEM_MANAGEMENT_MENU: [
                 MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
-                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
                 MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
                 MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),
                 MessageHandler(filters.Regex('^🗑️ Удалить$'), ask_uninstall),
-                MessageHandler(filters.Regex('^🔙 Назад$'), back_to_main_menu),
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
+            ],
+            # Новое подменю "Настройки бота"
+            BOT_SETTINGS_MENU: [
+                MessageHandler(filters.Regex('^📝 Уровень логов$'), menu_logging),
                 MessageHandler(filters.Regex('^Пинг в списке$'), menu_ping_toggle),
+                MessageHandler(filters.Regex('^Прокси для всего трафика$'), menu_default_proxy_type),
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
+            ],
+            # Новое подменю "Правила Firewall"
+            FIREWALL_MENU: [
+                MessageHandler(filters.Regex('^🔙 Назад$'), menu_settings),
             ],
             # Меню системы обхода
             BYPASS_MENU: [
@@ -1239,6 +1464,8 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_update_confirmation, pattern='^update_'))
     application.add_handler(CallbackQueryHandler(handle_log_level_selection, pattern='^log_'))
     application.add_handler(CallbackQueryHandler(handle_ping_toggle, pattern='^ping_toggle_'))
+    application.add_handler(CallbackQueryHandler(handle_firewall_action, pattern='^firewall_'))
+    application.add_handler(CallbackQueryHandler(handle_default_proxy_type_selection, pattern='^set_default_proxy_'))
     application.add_handler(CallbackQueryHandler(handle_key_action, pattern='^noop$'))
 
 

@@ -26,7 +26,8 @@ CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
-PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip start-stop-daemon"
+# Пакет start-stop-daemon удален из списка, т.к. он обычно является частью busybox/procps-ng в современных Entware
+PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip"
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="
@@ -79,8 +80,12 @@ run_with_spinner() {
     kill $pid 2>/dev/null
     trap - EXIT
     printf "\r%80s\r" " "
-    [ $res -ne 0 ] && { echo "$OUTPUT"; echo_err "$text завершилось с ошибкой"; }
-    echo_ok "$text"
+    if [ $res -ne 0 ]; then
+        echo "$OUTPUT"
+        echo_err "$text завершилось с ошибкой"
+    else
+        echo_ok "$text"
+    fi
 }
 
 # --- 3. Управление службами ---
@@ -494,9 +499,12 @@ case "$1" in
             echo_err "Не удалось скачать скрипт обновления."
         fi
 
-        do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS
-
-        echo_ok "Обновление завершено."
+        # Исправленная логика: прерываемся, если любой из шагов не удался
+        if do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS; then
+            echo_ok "Обновление завершено."
+        else
+            echo_err "Обновление не удалось."
+        fi
         ;;
     *)
         echo "Использование: $0 КОМАНДА [ПАРАМЕТРЫ]"

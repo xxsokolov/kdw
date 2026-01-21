@@ -152,7 +152,35 @@ do_uninstall() {
     echo_ok "Система полностью очищена."
 }
 
-# --- 5. Установка ---
+# --- 5. Установка и Обновление ---
+
+do_soft_update() {
+    echo_step "Запуск 'мягкого' обновления..."
+    logger -t "KDW-Update" "Starting soft update process."
+
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        echo_err "Невозможно выполнить 'мягкое' обновление. Директория не является Git-репозиторием."
+    fi
+
+    manage_services "stop"
+    logger -t "KDW-Update" "All services stopped."
+    sleep 2 # Даем время на завершение
+
+    cd "$INSTALL_DIR" || exit 1
+
+    run_with_spinner "Сброс локальных изменений (git reset)" git reset --hard HEAD
+    run_with_spinner "Получение обновлений из репозитория (git pull)" git pull
+    logger -t "KDW-Update" "Git pull completed."
+
+    run_with_spinner "Обновление Python-зависимостей" "$VENV_DIR/bin/pip" install --upgrade -r "$INSTALL_DIR/requirements.txt"
+    logger -t "KDW-Update" "Pip requirements updated."
+
+    manage_services "start"
+    logger -t "KDW-Update" "All services started."
+
+    echo_ok "Мягкое обновление успешно завершено."
+    logger -t "KDW-Update" "Soft update finished successfully."
+}
 
 do_install() {
     [ -d "$INSTALL_DIR" ] && echo_err "Бот уже установлен. Используйте --update."
@@ -473,8 +501,8 @@ case "$1" in
         ;;
     --update)
         if [ "$AUTO_CONFIRM" = "false" ]; then
-            echo "ВНИМАНИЕ: Обновление включает в себя полное удаление текущей версии и установку последней."
-            echo "Ваш конфигурационный файл (токен и ID) будет сохранен и использован для новой установки."
+            echo "ВНИМАНИЕ: Это действие обновит код бота до последней версии из репозитория ('мягкое' обновление)."
+            echo "Зависимости Python также будут обновлены. Системные пакеты и конфигурация не будут затронуты."
             printf "Вы уверены, что хотите продолжить? (y/N): "
             read -r confirmation
             case "$confirmation" in
@@ -482,30 +510,7 @@ case "$1" in
                 *) echo "Обновление отменено."; exit 0 ;;
             esac
         fi
-
-        echo_step "Начало процесса обновления..."
-        CONFIG_ARGS=""
-        if [ -f "$INSTALL_DIR/kdw.cfg" ]; then
-            TOKEN=$(awk -F' = ' '/^token =/ {print $2}' "$INSTALL_DIR/kdw.cfg")
-            USER_ID=$(sed -n 's/^access_ids = \[\(.*\)\].*/\1/p' "$INSTALL_DIR/kdw.cfg")
-            [ -n "$TOKEN" ] && [ -n "$USER_ID" ] && CONFIG_ARGS="--token=$TOKEN --user-id=$USER_ID"
-        fi
-
-        TMP_SCRIPT="/tmp/bootstrap_update.sh"
-        trap "rm -f '$TMP_SCRIPT'" EXIT HUP INT QUIT TERM
-
-        if ! curl -sL "https://raw.githubusercontent.com/xxsokolov/KDW/main/bootstrap.sh?$(date +%s)" -o "$TMP_SCRIPT"; then
-            echo_err "Не удалось скачать скрипт обновления."
-        fi
-
-        # Добавляем флаг -y к дочернему вызову, если он был в родительском
-        [ "$AUTO_CONFIRM" = "true" ] && CONFIG_ARGS="$CONFIG_ARGS -y"
-
-        if do_uninstall && sh "$TMP_SCRIPT" --install $CONFIG_ARGS; then
-            echo_ok "Обновление завершено."
-        else
-            echo_err "Обновление не удалось."
-        fi
+        do_soft_update
         ;;
     *)
         echo "Использование: $0 КОМАНДА [ПАРАМЕТРЫ]"
@@ -514,7 +519,7 @@ case "$1" in
         echo "  --install      Установить бота. Можно указать параметры доступа:"
         echo "                   --token=<BOT_TOKEN>"
         echo "                   --user-id=<USER_ID>"
-        echo "  --update       Обновить бота до последней версии"
+        echo "  --update       Обновить бота до последней версии ('мягкое' обновление)"
         echo "  --uninstall    Полностью удалить бота и его компоненты"
         echo "  -y             Автоматически подтверждать все запросы"
         echo ""

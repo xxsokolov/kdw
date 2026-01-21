@@ -912,9 +912,10 @@ async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     log.debug("Запрошено обновление", extra={'user_id': user_id})
     text = (
-        "Вы уверены, что хотите обновить бота до последней версии?\n\n"
-        "Это приведет к перезапуску бота. "
-        "Процесс может занять несколько минут."
+        "Вы уверены, что хотите запустить обновление?\n\n"
+        "Будет выполнено обновление бота и зависимостей. "
+        "Это приведет к временной остановке и перезапуску бота. "
+        "Конфигурация и системные пакеты затронуты не будут."
     )
     keyboard = [
         [
@@ -923,7 +924,7 @@ async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, reply_markup=reply_markup)
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     return SYSTEM_MANAGEMENT_MENU
 
 @private_access

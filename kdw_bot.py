@@ -44,7 +44,7 @@ from core.config_manager import ConfigManager
 from core.shell_utils import run_shell_command
 
 # --- Глобальные переменные и константы ---
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")

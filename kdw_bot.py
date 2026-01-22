@@ -92,16 +92,16 @@ list_manager = ListManager()
 
 # --- Клавиатуры ---
 # Определение раскладок кнопок для различных меню.
-main_keyboard = [["Система обхода", "Роутер"], ["Настройки"]]
+main_keyboard = [["Состояние"], ["Система обхода", "Роутер"], ["Настройки"]]
 settings_keyboard = [
     ["Управление системой", "Настройки бота"],
     ["Правила Firewall"],
     ["🔙 Назад"]
 ]
 system_management_keyboard = [
-    ["📊 Статус служб", "⚙️ Перезагрузить службы"],
-    ["🤖 Перезагрузить бота", "🔄 Обновить"],
-    ["🗑️ Удалить", "🔙 Назад"]
+    ["⚙️ Перезагрузить службы", "🤖 Перезагрузить бота"],
+    ["🔄 Обновить", "🗑️ Удалить"],
+    ["🔙 Назад"]
 ]
 bot_settings_keyboard = [
     ["📝 Уровень логов", "Пинг в списке"],
@@ -257,6 +257,114 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     log.debug(f"Start session for {user.full_name}", extra={'user_id': user.id})
     await update.message.reply_text(f"👋 Привет, {user.full_name}!", reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
+    return STATUS
+
+@private_access
+async def menu_state(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отображает сводную информацию о состоянии системы.
+    """
+    user_id = update.effective_user.id
+    log.debug("Запрошено общее состояние системы", extra={'user_id': user_id})
+    await update.message.reply_text("⏳ Собираю информацию о состоянии системы...")
+
+    report_parts = []
+
+    # 0. Версия бота
+    report_parts.append(f"🤖 *Версия бота*: `{__version__}`")
+
+    # 1. Состояние служб
+    services_status_report = await service_manager.get_all_statuses()
+    report_parts.append(f"🛡️ *Службы прокси*:\n{services_status_report}")
+
+    # 2. Активные конфиги
+    active_configs_lines = []
+    for proxy_type in PROXY_PORTS.keys():
+        manager = ConfigManager(proxy_type)
+        active_config_path = manager.get_active_config()
+        if active_config_path:
+            filename = os.path.basename(active_config_path)
+            active_configs_lines.append(f"  - *{proxy_type.capitalize()}*: `{filename}`")
+        else:
+            active_configs_lines.append(f"  - *{proxy_type.capitalize()}*: `не выбран`")
+    report_parts.append(f"📄 *Активные конфигурации*:\n" + "\n".join(active_configs_lines))
+
+    # 3. Режим Firewall
+    current_state = "unknown"
+    try:
+        if os.path.exists(FIREWALL_STATE_FILE):
+            with open(FIREWALL_STATE_FILE, "r") as f:
+                current_state = f.read().strip()
+    except Exception as e:
+        log.warning(f"Не удалось прочитать файл состояния Firewall: {e}")
+
+    firewall_mode_map = {
+        "lists_only": "По спискам",
+        "all_traffic": "Весь трафик",
+        "flushed": "Напрямую",
+        "unknown": "Неизвестно"
+    }
+    firewall_report = firewall_mode_map.get(current_state, "Неизвестно")
+    
+    if current_state == "all_traffic":
+        default_proxy = config.get('firewall', 'default_proxy_type', fallback='N/A')
+        firewall_report += f" (через {default_proxy.capitalize()})"
+
+    report_parts.append(f"🔥 *Режим Firewall*: `{firewall_report}`")
+
+    # 4. Системная информация (Uptime, Load, Memory, Disk)
+    # Uptime
+    success, uptime_output = await run_shell_command("uptime -p")
+    uptime_str = uptime_output.strip() if success else "Недоступно"
+    report_parts.append(f"⏱️ *Время работы системы*: `{uptime_str}`")
+
+    # Load Average
+    success, load_output = await run_shell_command("uptime")
+    load_avg_str = "Недоступно"
+    if success:
+        match = re.search(r"load average: ([\d.]+), ([\d.]+), ([\d.]+)", load_output)
+        if match:
+            load_avg_str = f"{match.group(1)}, {match.group(2)}, {match.group(3)}"
+    report_parts.append(f"📈 *Загрузка CPU (1, 5, 15 мин)*: `{load_avg_str}`")
+
+    # Memory Usage
+    success, mem_output = await run_shell_command("free -h")
+    mem_str = "Недоступно"
+    if success:
+        lines = mem_output.splitlines()
+        if len(lines) > 1:
+            mem_match = re.search(r"Mem:\s+(\S+)\s+(\S+)\s+(\S+)", lines[1])
+            if mem_match:
+                total_mem = mem_match.group(1)
+                used_mem = mem_match.group(2)
+                free_mem = mem_match.group(3)
+                mem_str = f"Всего: {total_mem}, Использовано: {used_mem}, Свободно: {free_mem}"
+            else:
+                mem_str = lines[1].strip()
+    report_parts.append(f"💾 *Использование RAM*: `{mem_str}`")
+
+    # Disk Usage
+    success, disk_output = await run_shell_command("df -h /")
+    disk_str = "Недоступно"
+    if success:
+        lines = disk_output.splitlines()
+        if len(lines) > 1:
+            disk_match = re.search(r"(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+/", lines[1])
+            if disk_match:
+                total_disk = disk_match.group(2)
+                used_disk = disk_match.group(3)
+                avail_disk = disk_match.group(4)
+                use_percent = disk_match.group(5)
+                disk_str = f"Всего: {total_disk}, Использовано: {used_disk} ({use_percent}), Свободно: {avail_disk}"
+            else:
+                disk_str = lines[1].strip()
+    report_parts.append(f"💽 *Использование диска (/)*: `{disk_str}`")
+
+
+    # Сборка и отправка итогового сообщения
+    full_report = "\n\n".join(report_parts)
+
+    await update.message.reply_text(full_report, parse_mode=ParseMode.MARKDOWN)
     return STATUS
 
 @private_access
@@ -841,31 +949,54 @@ async def menu_bot_settings(update: Update, _context: ContextTypes.DEFAULT_TYPE)
 @private_access
 async def menu_firewall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Отображает меню управления правилами Firewall.
+    Отображает меню управления правилами Firewall с описаниями режимов.
     """
     user_id = update.effective_user.id
     log.debug("Переход в меню 'Правила Firewall'", extra={'user_id': user_id})
     
-    # Получаем текущее состояние
-    script_path = os.path.join(script_dir, "scripts", "kdw_get_firewall_state.sh")
-    success, current_state = await run_shell_command(f"sh {script_path}")
-    current_state = current_state.strip() if success else "unknown"
+    # Получаем текущее состояние из файла
+    current_state = "unknown"
+    try:
+        if os.path.exists(FIREWALL_STATE_FILE):
+            with open(FIREWALL_STATE_FILE, "r") as f:
+                current_state = f.read().strip()
+    except Exception as e:
+        log.warning(f"Не удалось прочитать файл состояния Firewall: {e}")
 
     # Маркируем активную кнопку
     def get_button_text(mode, text):
         return f"✅ {text}" if mode == current_state else text
 
+    # Новые, более короткие названия кнопок
+    button_lists = get_button_text("lists_only", "По спискам")
+    button_all = get_button_text("all_traffic", "Весь трафик")
+    button_flush = get_button_text("flushed", "Напрямую")
+
     keyboard = [
-        [InlineKeyboardButton(get_button_text("lists_only", "Применить правила для списков"), callback_data="firewall_apply_lists")],
-        [InlineKeyboardButton(get_button_text("all_traffic", "Применить правила для всего трафика"), callback_data="firewall_apply_all")],
-        [InlineKeyboardButton(get_button_text("flushed", "Сбросить все правила"), callback_data="firewall_flush")],
+        [
+            InlineKeyboardButton(button_lists, callback_data="firewall_apply_lists"),
+            InlineKeyboardButton(button_all, callback_data="firewall_apply_all"),
+            InlineKeyboardButton(button_flush, callback_data="firewall_flush")
+        ],
     ]
     
-    await update.message.reply_text(
-        "Здесь вы можете управлять правилами `iptables` для прокси.\n\n"
-        "Выберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    # Текст с описаниями
+    text = (
+        "🔥 *Режим работы Firewall*\n\n"
+        "Здесь вы можете выбрать, как будет направляться трафик роутера. Текущий режим отмечен ✅.\n\n"
+        "• *По спискам* — трафик для доменов из списков `proxy` и `force-proxy` идет через прокси. Остальной трафик — напрямую.\n"
+        "• *Весь трафик* — весь трафик роутера (кроме локального) принудительно направляется через прокси.\n"
+        "• *Напрямую* — все правила проксирования отключены, весь трафик идет напрямую."
     )
+    
+    # Отправляем одно сообщение с инлайн-клавиатурой
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    # Основная клавиатура остается без изменений
     await update.message.reply_text("Меню Firewall.", reply_markup=ReplyKeyboardMarkup(firewall_keyboard, resize_keyboard=True))
     return FIREWALL_MENU
 
@@ -888,13 +1019,13 @@ async def handle_firewall_action(update: Update, context: ContextTypes.DEFAULT_T
         script_path = os.path.join(script_dir, "scripts", "kdw_apply_proxy_lists.sh")
         command = f"sh {script_path}"
         new_state = "lists_only"
-        await query.message.edit_text("⏳ Применяю правила для списков...", reply_markup=None)
+        await query.message.edit_text("⏳ Применяю режим 'По спискам'...", reply_markup=None)
 
     elif action == "flush":
         script_path = os.path.join(script_dir, "scripts", "kdw_flush_proxy_rules.sh")
         command = f"sh {script_path}"
         new_state = "flushed"
-        await query.message.edit_text("⏳ Сбрасываю правила...", reply_markup=None)
+        await query.message.edit_text("⏳ Применяю режим 'Напрямую'...", reply_markup=None)
 
     elif action == "apply_all":
         default_proxy = config.get('firewall', 'default_proxy_type', fallback='trojan')
@@ -916,14 +1047,20 @@ async def handle_firewall_action(update: Update, context: ContextTypes.DEFAULT_T
         script_path = os.path.join(script_dir, "scripts", "kdw_apply_all_traffic_proxy.sh")
         command = f"sh {script_path} {default_proxy} {port}"
         new_state = "all_traffic"
-        await query.message.edit_text(f"⏳ Применяю правила для всего трафика через {default_proxy}...", reply_markup=None)
+        await query.message.edit_text(f"⏳ Применяю режим 'Весь трафик' через {default_proxy}...", reply_markup=None)
 
     else:
         return FIREWALL_MENU
 
     # Записываем новое состояние для сохранения после перезагрузки
-    with open(FIREWALL_STATE_FILE, "w") as f:
-        f.write(new_state)
+    try:
+        with open(FIREWALL_STATE_FILE, "w") as f:
+            f.write(new_state)
+    except Exception as e:
+        log.error(f"Критическая ошибка: не удалось записать состояние Firewall в файл {FIREWALL_STATE_FILE}: {e}")
+        await query.message.edit_text(f"❌ Критическая ошибка: не удалось сохранить состояние Firewall.", reply_markup=None)
+        return FIREWALL_MENU
+
 
     success, output = await run_shell_command(command)
     
@@ -933,18 +1070,6 @@ async def handle_firewall_action(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.edit_text(f"❌ Ошибка выполнения скрипта!\n\n<pre>{html.escape(output)}</pre>", parse_mode=ParseMode.HTML)
         
     return FIREWALL_MENU
-
-@private_access
-async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Показывает статус системных служб.
-    """
-    user_id = update.effective_user.id
-    log.debug("Запрошен статус служб", extra={'user_id': user_id})
-    await update.message.reply_text("⏳ Проверяю статус служб...")
-    status_report = await service_manager.get_all_statuses()
-    await update.message.reply_text(f"Статус служб:\n\n{status_report}")
-    return SYSTEM_MANAGEMENT_MENU
 
 @private_access
 async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1019,7 +1144,6 @@ async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAU
             
         message = await query.message.edit_text("🚀 Обновление началось...", reply_markup=None)
         
-        # Запускаем обновление в фоне
         asyncio.create_task(installer.run_update(update, context, message))
 
     elif query.data == "update_cancel":
@@ -1422,6 +1546,7 @@ def main() -> None:
         states={
             # Главное меню
             STATUS: [
+                MessageHandler(filters.Regex('^Состояние$'), menu_state),
                 MessageHandler(filters.Regex('^Система обхода$'), menu_bypass_system),
                 MessageHandler(filters.Regex('^Настройки$'), menu_settings),
             ],
@@ -1434,7 +1559,6 @@ def main() -> None:
             ],
             # Новое подменю "Управление системой"
             SYSTEM_MANAGEMENT_MENU: [
-                MessageHandler(filters.Regex('^📊 Статус служб$'), menu_services_status),
                 MessageHandler(filters.Regex('^⚙️ Перезагрузить службы$'), ask_restart_services),
                 MessageHandler(filters.Regex('^🤖 Перезагрузить бота$'), ask_restart_bot),
                 MessageHandler(filters.Regex('^🔄 Обновить$'), ask_update),

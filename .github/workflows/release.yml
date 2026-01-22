@@ -69,8 +69,10 @@ jobs:
           sed -i "s/__version__ = \"$current_version\"/__version__ = \"$new_version\"/" kdw_bot.py
           
           # Сохраняем новую версию для следующих шагов
-          echo "new_version=$new_version" >> $GITHUB_OUTPUT
-          echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+          {
+            echo "new_version=$new_version"
+            echo "new_tag=v$new_version"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 5. Commit and push changes
         run: |

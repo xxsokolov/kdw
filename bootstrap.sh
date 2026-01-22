@@ -27,7 +27,7 @@ CPYTHON_REPO_URL="https://github.com/python/cpython.git"
 MANIFEST="${INSTALL_DIR}/install.manifest"
 
 # Список системных пакетов для архитектуры mipselsf-k3.4
-PKGS="python3 python3-pip jq git git-http ipset dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip"
+PKGS="python3 python3-pip jq git git-http ipset iptables dnsmasq-full shadowsocks-libev-ss-redir shadowsocks-libev-ss-local trojan v2ray-core tor tor-geoip"
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="

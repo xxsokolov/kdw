@@ -6,83 +6,98 @@
 # Описание:
 #   Применяет правила iptables для перенаправления трафика
 #   через прокси только для доменов из списков.
+#   Совместим с BusyBox ash.
 # =================================================================
 
-# Директория со скриптами
+# --- Переменные ---
 SCRIPT_DIR=$(dirname "$0")
-
-# Директория со списками доменов
 LISTS_DIR="/opt/etc/kdw/lists"
-
-# Список всех возможных типов прокси
 PROXY_TYPES="shadowsocks trojan vmess"
 
-# Ассоциативный массив "тип_прокси -> порт"
-declare -A PROXY_PORTS=(
-    ["shadowsocks"]="1080" # Пример, ss-redir обычно слушает этот порт
-    ["trojan"]="10829"
-    ["vmess"]="10810"
-)
+# --- Функции ---
+log() {
+    echo "$1"
+}
 
-echo "--- Применение правил Firewall для списков KDW ---"
-echo ""
+check_utils() {
+    for util in iptables ipset; do
+        if ! command -v "$util" >/dev/null 2>&1; then
+            log "ОШИБКА: Утилита '$util' не найдена. Установите ее (opkg install $util)."
+            exit 1
+        fi
+    done
+}
+
+# --- Основной код ---
+check_utils
+
+log "--- Применение правил Firewall для списков KDW ---"
+log ""
 
 # --- Шаг 1: Полная очистка старых правил ---
-echo "1. Выполняю полную очистку предыдущих правил KDW..."
-sh "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh"
-echo ""
+log "1. Выполняю полную очистку предыдущих правил KDW..."
+if [ -f "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh" ]; then
+    sh "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh"
+else
+    log "ОШИБКА: Скрипт очистки kdw_flush_proxy_rules.sh не найден!"
+    exit 1
+fi
+log ""
 
-# --- Шаг 2: Создание и наполнение ipset-списков ---
-echo "2. Создаю и наполняю ipset-списки..."
+# --- Шаг 2: Создание общей цепочки KDW ---
+log "2. Создаю общую цепочку KDW_PROXY..."
+iptables -t nat -N KDW_PROXY 2>/dev/null
+iptables -t nat -C PREROUTING -j KDW_PROXY >/dev/null 2>&1 || iptables -t nat -I PREROUTING 1 -j KDW_PROXY
+log ""
+
+# --- Шаг 3: Создание и наполнение ipset-списков ---
+log "3. Создаю и наполняю ipset-списки..."
 for PROXY in $PROXY_TYPES; do
-    IPSET_NAME="kdw_${PROXY}"
+    IPSET_NAME="kdw_${PROXY}_list"
     LIST_FILE="${LISTS_DIR}/${PROXY}.list"
 
-    echo " - Обработка для '$PROXY' (ipset: $IPSET_NAME)..."
+    log " - Обработка для '$PROXY' (ipset: $IPSET_NAME)..."
 
-    # Создаем ipset
     ipset create "$IPSET_NAME" hash:net -exist
+    ipset flush "$IPSET_NAME"
 
-    # Наполняем его, если файл списка существует
-    if [ -f "$LIST_FILE" ]; then
-        if [ -s "$LIST_FILE" ]; then # Проверяем, что файл не пустой
-            # Используем `grep` для удаления пустых строк и комментариев
-            grep -v -e '^$' -e '^#' "$LIST_FILE" | while IFS= read -r domain; do
-                ipset add "$IPSET_NAME" "$domain"
-            done
-            echo "   - ipset '$IPSET_NAME' наполнен из '$LIST_FILE'."
-        else
-            echo "   - Файл списка '$LIST_FILE' пуст. ipset создан, но оставлен пустым."
-        fi
+    if [ -s "$LIST_FILE" ]; then
+        grep -v -e '^$' -e '^#' "$LIST_FILE" | while IFS= read -r domain; do
+            ipset add "$IPSET_NAME" "$domain"
+        done
+        log "   - ipset '$IPSET_NAME' наполнен из '$LIST_FILE'."
     else
-        echo "   - Файл списка '$LIST_FILE' не найден. ipset создан, но оставлен пустым."
+        log "   - Файл списка '$LIST_FILE' не найден или пуст. ipset '$IPSET_NAME' оставлен пустым."
     fi
 done
-echo ""
+log ""
 
-# --- Шаг 3: Создание правил iptables ---
-echo "3. Создаю правила iptables для перенаправления..."
+# --- Шаг 4: Создание правил iptables ---
+log "4. Создаю правила iptables для перенаправления..."
 for PROXY in $PROXY_TYPES; do
-    IPSET_NAME="kdw_${PROXY}"
-    PORT=${PROXY_PORTS[$PROXY]}
+    IPSET_NAME="kdw_${PROXY}_list"
 
-    # Проверяем, есть ли хоть одна запись в ipset. Если нет, правило создавать бессмысленно.
-    if ipset -L "$IPSET_NAME" | grep -q 'Number of entries: 0'; then
-        echo " - ipset '$IPSET_NAME' пуст, правило для порта $PORT не создается."
+    PORT=""
+    case "$PROXY" in
+        "shadowsocks") PORT="1080" ;;
+        "trojan")      PORT="10829" ;;
+        "vmess")       PORT="10810" ;;
+    esac
+
+    if [ -z "$PORT" ]; then
+        log " - Пропускаю '$PROXY': порт не определен."
         continue
     fi
 
-    echo " - Создаю правило: трафик из '$IPSET_NAME' -> порт $PORT"
-
-    # Формируем правило
-    RULE_SPEC="-t nat -p tcp -m set --match-set $IPSET_NAME dst -j REDIRECT --to-port $PORT"
-
-    # Добавляем правило, если его еще нет (хотя после flush его быть не должно)
-    if ! iptables -C PREROUTING $RULE_SPEC >/dev/null 2>&1; then
-        iptables -I PREROUTING 1 $RULE_SPEC
+    if ipset -L "$IPSET_NAME" | grep -q 'Number of entries: 0'; then
+        log " - ipset '$IPSET_NAME' пуст, правило для порта $PORT не создается."
+        continue
     fi
-done
-echo ""
 
-echo "✅ Применение правил для списков завершено."
+    log " - Создаю правило: трафик для доменов из '$IPSET_NAME' -> порт $PORT"
+    iptables -t nat -A KDW_PROXY -p tcp -m set --match-set "$IPSET_NAME" dst -j REDIRECT --to-port "$PORT"
+done
+log ""
+
+log "✅ Применение правил для списков завершено."
 exit 0

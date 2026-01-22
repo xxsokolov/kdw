@@ -4,55 +4,65 @@
 # KDW Firewall Rule Flusher
 #
 # Описание:
-#   Этот скрипт находит и удаляет все правила iptables и
-#   ipset-списки, созданные KDW ботом.
+#   Полностью удаляет все правила iptables и ipset,
+#   созданные KDW.
+#   Совместим с BusyBox ash.
 # =================================================================
 
-# Список всех возможных типов прокси, которые могут создавать ipset'ы
-PROXY_TYPES="shadowsocks trojan vmess"
+# --- Функции ---
+log() {
+    echo "$1"
+}
 
-# Порты, на которые перенаправляется трафик для каждого типа прокси
-# Важно, чтобы они совпадали с теми, что будут в apply-скриптах
-declare -A PROXY_PORTS=(
-    ["shadowsocks"]="1080" # Пример, замените на реальный, если нужно
-    ["trojan"]="10829"
-    ["vmess"]="10810"
-)
+check_utils() {
+    for util in iptables ipset; do
+        if ! command -v "$util" >/dev/null 2>&1; then
+            log "ИНФО: Утилита '$util' не найдена. Пропускаю очистку для нее."
+            # Не выходим с ошибкой, так как при удалении это нормально
+        fi
+    done
+}
 
-echo "Начинаю сброс правил Firewall для KDW..."
-echo ""
+# --- Основной код ---
+check_utils
 
-# --- Шаг 1: Удаление правил iptables ---
-for PROXY in $PROXY_TYPES; do
-    IPSET_NAME="kdw_${PROXY}"
-    PORT=${PROXY_PORTS[$PROXY]}
+log "--- Очистка правил Firewall KDW ---"
 
-    if ipset -L "$IPSET_NAME" >/dev/null 2>&1; then
-        echo "Найден ipset '$IPSET_NAME'. Удаляю связанные правила iptables..."
+# --- Шаг 1: Удаление правил из PREROUTING ---
+if command -v "iptables" >/dev/null 2>&1; then
+    log "1. Удаляю ссылки на KDW_PROXY из цепочки PREROUTING..."
+    # Получаем список номеров правил, которые ссылаются на KDW_PROXY
+    while true; do
+        RULE_NUM=$(iptables -t nat -L PREROUTING --line-numbers | grep 'KDW_PROXY' | awk '{print $1}' | head -n 1)
+        if [ -z "$RULE_NUM" ]; then
+            break
+        fi
+        log " - Удаляю правило номер $RULE_NUM..."
+        iptables -t nat -D PREROUTING "$RULE_NUM"
+    done
+fi
 
-        # Формируем правило для поиска и удаления
-        RULE_SPEC="-t nat -p tcp -m set --match-set $IPSET_NAME dst -j REDIRECT --to-port $PORT"
-
-        # Удаляем правило, пока оно находится
-        while iptables -C PREROUTING $RULE_SPEC >/dev/null 2>&1; do
-            iptables -D PREROUTING $RULE_SPEC
-            echo "  - Удалено правило для порта $PORT"
-        done
+# --- Шаг 2: Очистка и удаление цепочки KDW_PROXY ---
+if command -v "iptables" >/dev/null 2>&1; then
+    if iptables -t nat -L KDW_PROXY >/dev/null 2>&1; then
+        log "2. Очищаю и удаляю цепочку KDW_PROXY..."
+        iptables -t nat -F KDW_PROXY
+        iptables -t nat -X KDW_PROXY
     else
-        echo "Ipset '$IPSET_NAME' не найден, пропуск."
+        log "2. Цепочка KDW_PROXY не найдена, пропускаю."
     fi
-    echo ""
-done
+fi
 
-# --- Шаг 2: Уничтожение ipset-списков ---
-for PROXY in $PROXY_TYPES; do
-    IPSET_NAME="kdw_${PROXY}"
-    if ipset -L "$IPSET_NAME" >/dev/null 2>&1; then
-        echo "Уничтожаю ipset '$IPSET_NAME'..."
-        ipset destroy "$IPSET_NAME"
-    fi
-done
+# --- Шаг 3: Удаление ipset-списков ---
+if command -v "ipset" >/dev/null 2>&1; then
+    log "3. Удаляю все ipset-списки KDW..."
+    # Находим все списки, начинающиеся с "kdw_"
+    ipset list -n | grep '^kdw_' | while read -r set_name; do
+        log " - Удаляю ipset '$set_name'..."
+        ipset destroy "$set_name"
+    done
+fi
 
-echo ""
-echo "✅ Сброс правил Firewall для KDW завершен."
+log ""
+log "✅ Очистка завершена."
 exit 0

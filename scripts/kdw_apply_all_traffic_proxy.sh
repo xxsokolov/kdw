@@ -5,55 +5,71 @@
 #
 # Описание:
 #   Применяет правила iptables для перенаправления всего
-#   трафика через один указанный прокси.
-#
-# Использование:
-#   sh kdw_apply_all_traffic_proxy.sh <proxy_type> <port>
-#   Пример: sh kdw_apply_all_traffic_proxy.sh trojan 10829
+#   трафика роутера через указанный прокси.
+#   Совместим с BusyBox ash.
 # =================================================================
 
-# --- Параметры ---
-PROXY_TYPE=$1
-PORT=$2
+# --- Переменные ---
+SCRIPT_DIR=$(dirname "$0")
 
-if [ -z "$PROXY_TYPE" ] || [ -z "$PORT" ]; then
-    echo "Ошибка: Не указан тип прокси и/или порт."
-    echo "Использование: $0 <proxy_type> <port>"
+# --- Функции ---
+log() {
+    echo "$1"
+}
+
+check_utils() {
+    if ! command -v "iptables" >/dev/null 2>&1; then
+        log "ОШИБКА: Утилита 'iptables' не найдена. Установите ее (opkg install iptables)."
+        exit 1
+    fi
+}
+
+# --- Проверка аргументов ---
+if [ -z "$1" ] || [ -z "$2" ]; then
+    log "ОШИБКА: Недостаточно аргументов."
+    log "Использование: $0 <proxy_type> <port>"
     exit 1
 fi
 
-# Директория со скриптами
-SCRIPT_DIR=$(dirname "$0")
+PROXY_TYPE=$1
+PROXY_PORT=$2
 
-echo "--- Применение правил Firewall для всего трафика через $PROXY_TYPE ---"
-echo ""
+# --- Основной код ---
+check_utils
+
+log "--- Применение правил Firewall для всего трафика через $PROXY_TYPE ---"
+log ""
 
 # --- Шаг 1: Полная очистка старых правил ---
-echo "1. Выполняю полную очистку предыдущих правил KDW..."
-sh "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh"
-echo ""
-
-# --- Шаг 2: Создание правила для всего трафика ---
-echo "2. Создаю правило для перенаправления всего трафика на порт $PORT..."
-
-# Исключения: не перенаправляем трафик, предназначенный для
-# - Приватных сетей (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12)
-# - Loopback-интерфейса (127.0.0.0/8)
-# - Широковещательных адресов
-EXCLUSIONS="-d 0.0.0.0/8 -d 127.0.0.0/8 -d 10.0.0.0/8 -d 172.16.0.0/12 -d 192.168.0.0/16 -d 224.0.0.0/4 -d 240.0.0.0/4"
-
-# Формируем правило
-# Мы используем -p tcp, так как большинство прокси (включая Trojan) не поддерживают UDP "из коробки" для всего трафика.
-RULE_SPEC="-t nat -p tcp $EXCLUSIONS -j REDIRECT --to-port $PORT"
-
-# Добавляем правило
-if ! iptables -C PREROUTING $RULE_SPEC >/dev/null 2>&1; then
-    iptables -I PREROUTING 1 $RULE_SPEC
-    echo "  - Правило создано."
+log "1. Выполняю полную очистку предыдущих правил KDW..."
+if [ -f "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh" ]; then
+    sh "${SCRIPT_DIR}/kdw_flush_proxy_rules.sh"
 else
-    echo "  - Правило уже существует."
+    log "ОШИБКА: Скрипт очистки kdw_flush_proxy_rules.sh не найден!"
+    exit 1
 fi
-echo ""
+log ""
 
-echo "✅ Применение правил для всего трафика завершено."
+# --- Шаг 2: Создание общей цепочки KDW ---
+log "2. Создаю общую цепочку KDW_PROXY..."
+iptables -t nat -N KDW_PROXY 2>/dev/null
+iptables -t nat -C PREROUTING -j KDW_PROXY >/dev/null 2>&1 || iptables -t nat -I PREROUTING 1 -j KDW_PROXY
+log ""
+
+# --- Шаг 3: Создание правил для перенаправления всего трафика ---
+log "3. Создаю правила для перенаправления всего трафика на порт $PROXY_PORT..."
+
+# Исключаем локальные сети, чтобы не было зацикливания
+EXCLUDE_NETS="0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
+
+for net in $EXCLUDE_NETS; do
+    log " - Исключаю сеть $net"
+    iptables -t nat -A KDW_PROXY -d "$net" -j RETURN
+done
+
+log " - Перенаправляю остальной TCP трафик на порт $PROXY_PORT"
+iptables -t nat -A KDW_PROXY -p tcp -j REDIRECT --to-port "$PROXY_PORT"
+log ""
+
+log "✅ Применение правил для всего трафика завершено."
 exit 0

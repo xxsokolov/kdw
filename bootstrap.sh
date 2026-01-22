@@ -102,19 +102,20 @@ run_with_spinner() {
 # Универсальная функция для массового управления сервисами
 manage_services() {
     local action=$1
+    local exclude_svc=$2
     echo_step "Действие '$action' для всех служб..."
     for name in $MANAGED_SERVICES; do
+        if [ "$name" = "$exclude_svc" ]; then
+            echo "  - Пропускаю службу '$name'"
+            continue
+        fi
         local file=$(find_svc "$name")
         if [ -f "$file" ]; then
             if [ "$action" = "delete" ]; then
                 rm -f "$file"
             else
                 echo "  - $(basename "$file") $action"
-                if [ "$name" = "kdwbot" ]; then
-                    "$file" "$action" # Не перенаправляем вывод, чтобы видеть ошибки
-                else
-                    "$file" "$action" >/dev/null 2>&1
-                fi
+                "$file" "$action" >/dev/null 2>&1
                 [ "$action" = "start" ] && sleep 1
             fi
         fi
@@ -158,8 +159,9 @@ do_update() {
     echo_step "Запуск обновления..."
     logger -t "KDW-Update" "Starting update process."
 
-    manage_services "stop"
-    logger -t "KDW-Update" "All services stopped."
+    # Останавливаем все службы, КРОМЕ самого бота
+    manage_services "stop" "kdwbot"
+    logger -t "KDW-Update" "All services (except bot) stopped."
     sleep 2
 
     TMP_REPO_DIR="/opt/tmp/kdw_repo_$$"
@@ -180,8 +182,16 @@ do_update() {
     run_with_spinner "Обновление Python-зависимостей" "$VENV_DIR/bin/pip" install --upgrade -r "$INSTALL_DIR/requirements.txt"
     logger -t "KDW-Update" "Pip requirements updated."
 
-    manage_services "start"
-    logger -t "KDW-Update" "All services started."
+    # Запускаем все службы, КРОМЕ самого бота
+    manage_services "start" "kdwbot"
+    logger -t "KDW-Update" "All services (except bot) started."
+
+    # Перезапускаем бота в самом конце, чтобы применить обновления
+    echo_step "Перезапуск бота для применения обновлений..."
+    kdwbot_svc=$(find_svc "kdwbot")
+    if [ -f "$kdwbot_svc" ]; then
+        "$kdwbot_svc" restart
+    fi
 
     echo_ok "Обновление успешно завершено."
     logger -t "KDW-Update" "Update finished successfully."

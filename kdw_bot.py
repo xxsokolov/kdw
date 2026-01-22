@@ -18,6 +18,8 @@ from ast import literal_eval
 from functools import wraps
 import asyncio
 import logging
+import httpx
+from packaging.version import parse as parse_version
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -42,6 +44,7 @@ from core.config_manager import ConfigManager
 from core.shell_utils import run_shell_command
 
 # --- Глобальные переменные и константы ---
+__version__ = "1.0.0"
 script_dir = os.path.dirname(os.path.abspath(__file__))
 default_config_file = os.path.join(script_dir, "kdw.cfg")
 persistence_file = os.path.join(script_dir, "kdw_persistence.pickle")
@@ -204,6 +207,45 @@ async def clear_key_config_messages(context: ContextTypes.DEFAULT_TYPE, chat_id:
             except Exception as e:
                 log.debug(f"Could not delete message {msg_id}: {e}")
         context.user_data['key_config_messages'] = []
+
+# --- Новые функции для проверки обновлений ---
+async def get_latest_version() -> str | None:
+    """Получает последнюю версию с GitHub."""
+    url = "https://api.github.com/repos/xxsokolov/KDW/releases/latest"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("tag_name", "").lstrip('v')
+    except (httpx.RequestError, json.JSONDecodeError) as e:
+        log.warning(f"Не удалось проверить обновления: {e}")
+        return None
+
+async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
+    """Периодическая задача для проверки обновлений."""
+    latest_version_str = await get_latest_version()
+    if not latest_version_str:
+        return
+
+    current_version = parse_version(__version__)
+    latest_version = parse_version(latest_version_str)
+
+    if latest_version > current_version:
+        last_notified_version = context.bot_data.get("last_notified_version")
+        if str(latest_version) != last_notified_version:
+            text = (
+                f"📢 Доступно обновление!\n\n"
+                f"Текущая версия: `{__version__}`\n"
+                f"Новая версия: `{latest_version_str}`\n\n"
+                "Нажмите '🔄 Обновить' в меню 'Управление системой', чтобы обновиться."
+            )
+            for user_id in literal_eval(config.get("telegram", "access_ids")):
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=text, parse_mode=ParseMode.MARKDOWN)
+                except Exception as e:
+                    log.error(f"Не удалось отправить уведомление об обновлении пользователю {user_id}: {e}")
+            context.bot_data["last_notified_version"] = str(latest_version)
 
 # --- Обработчики главного меню ---
 @private_access
@@ -906,12 +948,19 @@ async def menu_services_status(update: Update, _context: ContextTypes.DEFAULT_TY
 
 @private_access
 async def ask_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Запрашивает подтверждение на обновление бота.
-    """
+    """Запрашивает подтверждение на обновление бота."""
     user_id = update.effective_user.id
     log.debug("Запрошено обновление", extra={'user_id': user_id})
+
+    latest_version_str = await get_latest_version()
+    version_info = f"Текущая версия: `{__version__}`\n"
+    if latest_version_str:
+        version_info += f"Последняя доступная версия: `{latest_version_str}`\n\n"
+    else:
+        version_info += "Не удалось проверить последнюю версию.\n\n"
+
     text = (
+        f"{version_info}"
         "Вы уверены, что хотите запустить обновление?\n\n"
         "Будут загружены и установлены последние версии файлов бота. "
         "Это приведет к временной остановке всех сервисов и перезапуску бота. "
@@ -1363,6 +1412,9 @@ def main() -> None:
                    .post_init(post_restart_hook)
                    .post_init(post_update_hook)
                    .build())
+
+    # Запускаем периодическую проверку обновлений (раз в 24 часа)
+    application.job_queue.run_repeating(check_for_updates, interval=86400, first=10)
 
     # Основной обработчик диалогов, управляющий навигацией по меню
     conv_handler = ConversationHandler(

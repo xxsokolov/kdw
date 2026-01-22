@@ -1,0 +1,95 @@
+# .github/workflows/release.yml
+
+name: Create New Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: "Тип новой версии (major, minor, patch)"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout code
+        uses: actions/checkout@v3
+        with:
+          # Нам нужна полная история для создания тегов и GITHUB_TOKEN для push
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 2. Setup Git user
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: 3. Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 4. Bump version and create variables
+        id: bump_version
+        run: |
+          # Читаем текущую версию из файла
+          current_version=$(grep -oP '(?<=__version__ = ")[^"]+' kdw_bot.py)
+          
+          # Разбиваем версию на части
+          IFS='.' read -r -a version_parts <<< "$current_version"
+          major=${version_parts[0]}
+          minor=${version_parts[1]}
+          patch=${version_parts[2]}
+
+          # Увеличиваем нужную часть в зависимости от выбора пользователя
+          version_type="${{ github.event.inputs.version_type }}"
+          if [[ "$version_type" == "major" ]]; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          elif [[ "$version_type" == "minor" ]]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          
+          new_version="$major.$minor.$patch"
+          echo "Старая версия: $current_version"
+          echo "Новая версия: $new_version"
+
+          # Заменяем версию в файле
+          sed -i "s/__version__ = \"$current_version\"/__version__ = \"$new_version\"/" kdw_bot.py
+          
+          # Сохраняем новую версию для следующих шагов
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+
+      - name: 5. Commit and push changes
+        run: |
+          git add kdw_bot.py
+          git commit -m "chore: Bump version to ${{ steps.bump_version.outputs.new_version }}"
+          git push
+
+      - name: 6. Create Git tag
+        run: |
+          git tag -a ${{ steps.bump_version.outputs.new_tag }} -m "Release ${{ steps.bump_version.outputs.new_version }}"
+          git push --tags
+
+      - name: 7. Create GitHub Release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ steps.bump_version.outputs.new_tag }}
+          release_name: "Release ${{ steps.bump_version.outputs.new_version }}"
+          body: "Автоматический релиз новой версии."
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

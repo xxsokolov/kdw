@@ -154,23 +154,28 @@ do_uninstall() {
 
 # --- 5. Установка и Обновление ---
 
-do_soft_update() {
-    echo_step "Запуск 'мягкого' обновления..."
-    logger -t "KDW-Update" "Starting soft update process."
-
-    if [ ! -d "$INSTALL_DIR/.git" ]; then
-        echo_err "Невозможно выполнить 'мягкое' обновление. Директория не является Git-репозиторием."
-    fi
+do_update() {
+    echo_step "Запуск обновления..."
+    logger -t "KDW-Update" "Starting update process."
 
     manage_services "stop"
     logger -t "KDW-Update" "All services stopped."
-    sleep 2 # Даем время на завершение
+    sleep 2
 
-    cd "$INSTALL_DIR" || exit 1
+    TMP_REPO_DIR="/opt/tmp/kdw_repo_$$"
+    run_with_spinner "Загрузка последней версии" git clone --depth 1 "$REPO_URL" "$TMP_REPO_DIR"
 
-    run_with_spinner "Сброс локальных изменений (git reset)" git reset --hard HEAD
-    run_with_spinner "Получение обновлений из репозитория (git pull)" git pull
-    logger -t "KDW-Update" "Git pull completed."
+    echo_step "Копирование новых файлов..."
+    # Копируем только то, что нужно, не затирая пользовательские данные
+    cp -r "$TMP_REPO_DIR/core" "$INSTALL_DIR/"
+    cp -r "$TMP_REPO_DIR/scripts" "$INSTALL_DIR/"
+    cp "$TMP_REPO_DIR/kdw_bot.py" "$INSTALL_DIR/"
+    cp "$TMP_REPO_DIR/requirements.txt" "$INSTALL_DIR/"
+    cp "$TMP_REPO_DIR/bootstrap.sh" "$INSTALL_DIR/"
+    cp "$TMP_REPO_DIR/kdw.cfg.example" "$INSTALL_DIR/"
+    echo_ok "Файлы приложения обновлены."
+
+    rm -rf "$TMP_REPO_DIR"
 
     run_with_spinner "Обновление Python-зависимостей" "$VENV_DIR/bin/pip" install --upgrade -r "$INSTALL_DIR/requirements.txt"
     logger -t "KDW-Update" "Pip requirements updated."
@@ -178,8 +183,8 @@ do_soft_update() {
     manage_services "start"
     logger -t "KDW-Update" "All services started."
 
-    echo_ok "Мягкое обновление успешно завершено."
-    logger -t "KDW-Update" "Soft update finished successfully."
+    echo_ok "Обновление успешно завершено."
+    logger -t "KDW-Update" "Update finished successfully."
 }
 
 do_install() {
@@ -501,8 +506,8 @@ case "$1" in
         ;;
     --update)
         if [ "$AUTO_CONFIRM" = "false" ]; then
-            echo "ВНИМАНИЕ: Это действие обновит код бота до последней версии из репозитория ('мягкое' обновление)."
-            echo "Зависимости Python также будут обновлены. Системные пакеты и конфигурация не будут затронуты."
+            echo "ВНИМАНИЕ: Будут загружены и установлены последние версии файлов бота."
+            echo "Ваши настройки, ключи и списки затронуты не будут."
             printf "Вы уверены, что хотите продолжить? (y/N): "
             read -r confirmation
             case "$confirmation" in
@@ -510,7 +515,7 @@ case "$1" in
                 *) echo "Обновление отменено."; exit 0 ;;
             esac
         fi
-        do_soft_update
+        do_update
         ;;
     *)
         echo "Использование: $0 КОМАНДА [ПАРАМЕТРЫ]"
@@ -519,7 +524,7 @@ case "$1" in
         echo "  --install      Установить бота. Можно указать параметры доступа:"
         echo "                   --token=<BOT_TOKEN>"
         echo "                   --user-id=<USER_ID>"
-        echo "  --update       Обновить бота до последней версии ('мягкое' обновление)"
+        echo "  --update       Обновить файлы бота до последней версии"
         echo "  --uninstall    Полностью удалить бота и его компоненты"
         echo "  -y             Автоматически подтверждать все запросы"
         echo ""

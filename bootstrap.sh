@@ -114,8 +114,21 @@ manage_services() {
             if [ "$action" = "delete" ]; then
                 rm -f "$file"
             else
-                echo "  - $(basename "$file") $action"
-                "$file" "$action" >/dev/null 2>&1
+                printf "  - $(basename "$file") $action..."
+                # Выполняем команду, захватывая ее вывод
+                output=$("$file" "$action" 2>&1)
+                local res=$?
+                # Проверяем код возврата
+                if [ $res -ne 0 ]; then
+                    printf "\r" # Возврат каретки, чтобы перезаписать строку
+                    # Выводим ошибку с подробностями
+                    echo_err "Не удалось выполнить '$action' для службы $(basename "$file"):"
+                    echo "$output"
+                    exit 1
+                else
+                    printf "\r"
+                    echo_ok "$(basename "$file") $action"
+                fi
                 [ "$action" = "start" ] && sleep 1
             fi
         fi
@@ -175,6 +188,11 @@ do_update() {
     cp "$TMP_REPO_DIR/requirements.txt" "$INSTALL_DIR/"
     cp "$TMP_REPO_DIR/bootstrap.sh" "$INSTALL_DIR/"
     cp "$TMP_REPO_DIR/kdw.cfg.example" "$INSTALL_DIR/"
+
+    # Обновляем конфигурацию dnsmasq
+    echo_step "Обновление конфигурации dnsmasq..."
+    cp "$TMP_REPO_DIR/conf/dnsmasq.conf" "/opt/etc/dnsmasq.conf"
+
     echo_ok "Файлы приложения обновлены."
 
     rm -rf "$TMP_REPO_DIR"
@@ -293,6 +311,19 @@ EOF
     run_with_spinner "Клонирование репозитория бота" git clone --depth 1 "$REPO_URL" "/opt/tmp/repo"
     cp -r /opt/tmp/repo/* "$INSTALL_DIR/"
     rm -rf /opt/tmp/repo
+
+    # --- Установка и настройка dnsmasq ---
+    echo_step "Настройка dnsmasq..."
+    DNSMASQ_CONF_PATH="/opt/etc/dnsmasq.conf"
+    DNSMASQ_DYNAMIC_DIR="${INSTALL_DIR}/dnsmasq.d"
+
+    # Копируем нашу кастомную конфигурацию
+    cp "${INSTALL_DIR}/conf/dnsmasq.conf" "$DNSMASQ_CONF_PATH"
+    add_m "file:$DNSMASQ_CONF_PATH"
+
+    # Создаем директорию для динамических правил
+    mkdir -p "$DNSMASQ_DYNAMIC_DIR"
+    add_m "dir:$DNSMASQ_DYNAMIC_DIR"
 
     # Создание изолированного виртуального окружения Python
     run_with_spinner "Создание venv" python3 -m venv "$VENV_DIR"

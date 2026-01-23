@@ -237,12 +237,18 @@ async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
             text = (
                 f"📢 Доступно обновление!\n\n"
                 f"Текущая версия: `{__version__}`\n"
-                f"Новая версия: `{latest_version_str}`\n\n"
-                "Нажмите '🔄 Обновить' в меню 'Управление системой', чтобы обновиться."
+                f"Новая версия: `{latest_version_str}`"
             )
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 Обновить", callback_data="update_now"),
+                    InlineKeyboardButton("Отмена", callback_data="update_cancel"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             for user_id in literal_eval(config.get("telegram", "access_ids")):
                 try:
-                    await context.bot.send_message(chat_id=user_id, text=text, parse_mode=ParseMode.MARKDOWN)
+                    await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
                 except Exception as e:
                     log.error(f"Не удалось отправить уведомление об обновлении пользователю {user_id}: {e}")
             context.bot_data["last_notified_version"] = str(latest_version)
@@ -1134,7 +1140,7 @@ async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAU
     await query.answer()
     user_id = query.from_user.id
 
-    if query.data == "update_confirm":
+    if query.data == "update_confirm" or query.data == "update_now":
         log.debug("Пользователь подтвердил обновление.", extra={'user_id': user_id})
         
         # Сохраняем chat_id для хука после обновления
@@ -1144,6 +1150,7 @@ async def handle_update_confirmation(update: Update, context: ContextTypes.DEFAU
             
         message = await query.message.edit_text("🚀 Обновление началось...", reply_markup=None)
         
+        # Запускаем обновление в фоне
         asyncio.create_task(installer.run_update(update, context, message))
 
     elif query.data == "update_cancel":

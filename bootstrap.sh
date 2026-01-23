@@ -31,7 +31,7 @@ PKGS="python3 python3-pip jq git git-http ipset iptables dnsmasq-full shadowsock
 
 # Карта соответствия пакетов и их скриптов инициализации для проверки установки
 PKG_MAP="
-    shadowsocks-libev-ss-redir:shadowsocks
+    shadowsocks-libev-ss-redir:shadowocks
     trojan:trojan
     v2ray-core:v2ray
     tor:tor
@@ -193,8 +193,10 @@ do_update() {
     cp "$TMP_REPO_DIR/bootstrap.sh" "$INSTALL_DIR/"
     cp "$TMP_REPO_DIR/kdw.cfg.example" "$INSTALL_DIR/"
 
-    # Обновляем конфигурацию dnsmasq
+    # Обновляем конфигурацию dnsmasq и создаем нужную директорию
     echo_step "Обновление конфигурации dnsmasq..."
+    DNSMASQ_DYNAMIC_DIR="${INSTALL_DIR}/ipsets" # Изменено на ipsets
+    mkdir -p "$DNSMASQ_DYNAMIC_DIR"
     cp "$TMP_REPO_DIR/conf/dnsmasq.conf" "/opt/etc/dnsmasq.conf"
 
     echo_ok "Файлы приложения обновлены."
@@ -319,7 +321,7 @@ EOF
     # --- Установка и настройка dnsmasq ---
     echo_step "Настройка dnsmasq..."
     DNSMASQ_CONF_PATH="/opt/etc/dnsmasq.conf"
-    DNSMASQ_DYNAMIC_DIR="${INSTALL_DIR}/dnsmasq.d"
+    DNSMASQ_DYNAMIC_DIR="${INSTALL_DIR}/ipsets" # Изменено на ipsets
 
     # Копируем нашу кастомную конфигурацию
     cp "${INSTALL_DIR}/conf/dnsmasq.conf" "$DNSMASQ_CONF_PATH"

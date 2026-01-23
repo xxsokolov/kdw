@@ -49,6 +49,8 @@ echo_step() { printf "\033[0;36m->\033[0m %s\n" "$1"; }
 echo_ok() { printf "\033[0;32m[OK] %s\033[0m\n" "$1"; }
 # Вывод ошибки и выход
 echo_err() { printf "\033[0;31m[ERROR] %s\033[0m\n" "$1"; exit 1; }
+# Вывод предупреждения
+echo_warn() { printf "\033[0;33m[WARN] %s\033[0m\n" "$1"; }
 
 # Парсинг флага -y для автоматического подтверждения
 AUTO_CONFIRM=false
@@ -115,18 +117,20 @@ manage_services() {
                 rm -f "$file"
             else
                 printf "  - $(basename "$file") $action..."
-                # Выполняем команду, захватывая ее вывод
                 output=$("$file" "$action" 2>&1)
                 local res=$?
-                # Проверяем код возврата
+                printf "\r" # Возврат каретки для красивого вывода
                 if [ $res -ne 0 ]; then
-                    printf "\r" # Возврат каретки, чтобы перезаписать строку
-                    # Выводим ошибку с подробностями
-                    echo_err "Не удалось выполнить '$action' для службы $(basename "$file"):"
-                    echo "$output"
-                    exit 1
+                    if [ "$action" = "start" ]; then
+                        # Ошибка при запуске - это критично
+                        echo_err "Не удалось выполнить '$action' для службы $(basename "$file"):"
+                        echo "$output"
+                        exit 1
+                    else
+                        # Ошибка при остановке - это предупреждение (служба могла быть уже остановлена)
+                        echo_warn "При выполнении '$action' для $(basename "$file") возникла некритическая ошибка."
+                    fi
                 else
-                    printf "\r"
                     echo_ok "$(basename "$file") $action"
                 fi
                 [ "$action" = "start" ] && sleep 1

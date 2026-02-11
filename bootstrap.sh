@@ -303,7 +303,7 @@ EOF
         tmp_v="/opt/tmp/v_fix"; mkdir -p "$tmp_v"
         PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         PY_LIB_PATH=$(python3 -c "import site, os; print(os.path.dirname(site.getsitepackages()[0]))")
-        run_with_spinner "Загрузка исходников модулей Python" git clone --depth=1 --branch="v$PY_VER" "$CPYTHON_REPO_URL" "$tmp_v"
+        run_with_spinner "Загрузка исходников модулей Python" git clone --depth=1 --branch="$PY_VER" "$CPYTHON_REPO_URL" "$tmp_v"
         cp -r "$tmp_v/Lib/venv" "$tmp_v/Lib/ensurepip" "$PY_LIB_PATH/"
         rm -rf "$tmp_v"
     fi
